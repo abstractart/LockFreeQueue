@@ -29,8 +29,25 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
-      - name: Run tests
-        run: ./gradlew test --no-daemon
+      - name: Run tests with coverage
+        run: ./gradlew test jacocoTestReport --no-daemon
+
+      - name: Print coverage summary
+        if: always()
+        run: |
+          if [ -f build/reports/jacoco/test/jacocoTestReport.xml ]; then
+            PCT=$(python3 .github/scripts/jacoco_coverage.py build/reports/jacoco/test/jacocoTestReport.xml)
+            echo "Instruction coverage: ${PCT}%"
+            echo "### Coverage: ${PCT}%" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/reports/jacoco/test
+          if-no-files-found: ignore
 
       - name: Upload test report
         if: always()
@@ -39,3 +56,77 @@ jobs:
           name: test-report
           path: build/reports/tests/test
           if-no-files-found: ignore
+
+  coverage-check:
+    name: Coverage check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Checkout head
+        uses: actions/checkout@v4
+        with:
+          path: head
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Compute base coverage
+        id: base
+        working-directory: base
+        run: |
+          chmod +x ./gradlew
+          if [ ! -f build.gradle ] || ! grep -q jacoco build.gradle; then
+            echo "Base lacks JaCoCo — treating base coverage as 0%."
+            echo "pct=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ./gradlew test jacocoTestReport --no-daemon
+          PCT=$(python3 ../head/.github/scripts/jacoco_coverage.py build/reports/jacoco/test/jacocoTestReport.xml)
+          echo "Base coverage: ${PCT}%"
+          echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+
+      - name: Compute head coverage
+        id: head
+        working-directory: head
+        run: |
+          chmod +x ./gradlew
+          ./gradlew test jacocoTestReport --no-daemon
+          PCT=$(python3 .github/scripts/jacoco_coverage.py build/reports/jacoco/test/jacocoTestReport.xml)
+          echo "Head coverage: ${PCT}%"
+          echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+
+      - name: Compare coverage
+        run: |
+          BASE="${{ steps.base.outputs.pct }}"
+          HEAD="${{ steps.head.outputs.pct }}"
+          echo "Base coverage: ${BASE}%"
+          echo "Head coverage: ${HEAD}%"
+          {
+            echo "### Coverage diff"
+            echo ""
+            echo "| Branch | Coverage |"
+            echo "|--------|----------|"
+            echo "| base   | ${BASE}% |"
+            echo "| head   | ${HEAD}% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<PY
+          base = float("$BASE")
+          head = float("$HEAD")
+          if head + 1e-9 < base:
+              print(f"::error::Coverage decreased: {base}% -> {head}%")
+              raise SystemExit(1)
+          print(f"OK: coverage {base}% -> {head}%")
+          PY
