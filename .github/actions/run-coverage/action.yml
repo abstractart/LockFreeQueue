@@ -1,0 +1,61 @@
+name: Run tests with coverage
+description: Sets up JDK + Gradle, runs tests with JaCoCo, exposes instruction coverage %.
+
+inputs:
+  working-directory:
+    description: Directory to run Gradle in.
+    required: false
+    default: .
+  script-path:
+    description: Path to jacoco_coverage.py, relative to working-directory.
+    required: false
+    default: .github/scripts/jacoco_coverage.py
+  skip-if-no-jacoco:
+    description: If 'true' and build.gradle lacks jacoco, skip with pct=0 and has-report=false.
+    required: false
+    default: 'false'
+
+outputs:
+  pct:
+    description: Instruction coverage as a percentage.
+    value: ${{ steps.run.outputs.pct }}
+  has-report:
+    description: Whether a JaCoCo XML report was produced.
+    value: ${{ steps.run.outputs.has_report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '21'
+
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+
+    - name: Run tests and compute coverage
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        chmod +x ./gradlew
+        if [ "${{ inputs.skip-if-no-jacoco }}" = "true" ] && { [ ! -f build.gradle ] || ! grep -q jacoco build.gradle; }; then
+          echo "JaCoCo not configured here — treating coverage as 0%."
+          echo "pct=0" >> "$GITHUB_OUTPUT"
+          echo "has_report=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        GRADLE_FAILED=0
+        ./gradlew test jacocoTestReport --no-daemon || GRADLE_FAILED=1
+        if [ -f build/reports/jacoco/test/jacocoTestReport.xml ]; then
+          PCT=$(python3 "${{ inputs.script-path }}" build/reports/jacoco/test/jacocoTestReport.xml)
+          echo "Coverage: ${PCT}%"
+          echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+          echo "has_report=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "pct=0" >> "$GITHUB_OUTPUT"
+          echo "has_report=false" >> "$GITHUB_OUTPUT"
+        fi
+        exit $GRADLE_FAILED
