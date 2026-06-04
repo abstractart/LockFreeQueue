@@ -38,7 +38,11 @@ jobs:
           if [ -f build/reports/jacoco/test/jacocoTestReport.xml ]; then
             PCT=$(python3 .github/scripts/jacoco_coverage.py build/reports/jacoco/test/jacocoTestReport.xml)
             echo "Instruction coverage: ${PCT}%"
-            echo "### Coverage: ${PCT}%" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "### Coverage: ${PCT}%"
+              echo ""
+              echo "Download the **coverage-report** artifact from the run summary and open \`index.html\` to drill into per-class / per-line coverage."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload coverage report
@@ -91,12 +95,22 @@ jobs:
           if [ ! -f build.gradle ] || ! grep -q jacoco build.gradle; then
             echo "Base lacks JaCoCo — treating base coverage as 0%."
             echo "pct=0" >> "$GITHUB_OUTPUT"
+            echo "has_report=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           ./gradlew test jacocoTestReport --no-daemon
           PCT=$(python3 ../head/.github/scripts/jacoco_coverage.py build/reports/jacoco/test/jacocoTestReport.xml)
           echo "Base coverage: ${PCT}%"
           echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+          echo "has_report=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload base coverage report
+        if: always() && steps.base.outputs.has_report == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-base
+          path: base/build/reports/jacoco/test
+          if-no-files-found: ignore
 
       - name: Compute head coverage
         id: head
@@ -107,6 +121,14 @@ jobs:
           PCT=$(python3 .github/scripts/jacoco_coverage.py build/reports/jacoco/test/jacocoTestReport.xml)
           echo "Head coverage: ${PCT}%"
           echo "pct=$PCT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload head coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-head
+          path: head/build/reports/jacoco/test
+          if-no-files-found: ignore
 
       - name: Compare coverage
         run: |
@@ -121,6 +143,8 @@ jobs:
             echo "|--------|----------|"
             echo "| base   | ${BASE}% |"
             echo "| head   | ${HEAD}% |"
+            echo ""
+            echo "Download **coverage-report-base** and **coverage-report-head** artifacts from this run to compare per-class / per-line coverage and find regressions."
           } >> "$GITHUB_STEP_SUMMARY"
           python3 - <<PY
           base = float("$BASE")
