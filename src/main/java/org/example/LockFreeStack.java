@@ -4,17 +4,15 @@ import java.util.EmptyStackException;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class LockFreeStack {
-    AtomicReference<AtomicNode> head;
+    AtomicNode head;
 
     LockFreeStack() {
-        AtomicNode node = new AtomicNode(0);
-
-        head = new AtomicReference<AtomicNode>(node);
+        head = new AtomicNode(0);
     }
 
     void push(int val) {
         while (true) {
-            AtomicNode dummyHead = head.get();
+            AtomicNode dummyHead = head;
             AtomicNode realHead = dummyHead.next.get();
 
             AtomicNode candidate = new AtomicNode(val);
@@ -28,14 +26,15 @@ public class LockFreeStack {
 
     int pop() {
         while(true) {
-            AtomicNode dummyHead = head.get();
+            AtomicNode dummyHead = head;
             AtomicNode realHead = dummyHead.next.get();
-
             if (realHead == null) {
                 throw new EmptyStackException();
             }
+            AtomicNode newHead = realHead.next.get();
 
-           if (head.compareAndSet(dummyHead, realHead)) {
+
+            if (dummyHead.next.compareAndSet(realHead, newHead)) {
                return realHead.val;
            }
         }
