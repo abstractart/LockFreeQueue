@@ -18,20 +18,17 @@ class Queue {
     Queue() {
         head = new Node(0);
         tail = head;
-    }
+    } 
 
     int pop() {
-        Node currHead = head.next;
-
-        if (currHead == null) {
+        if (head.next == null) {
             throw new EmptyStackException();
         }
-        head.next = currHead.next;
 
-        if (tail == currHead) {
-            tail = head;
-        }
-        return currHead.val;
+        int result = head.next.val;
+        head = head.next;
+
+        return result;
     }
 
     void push(int val) {
