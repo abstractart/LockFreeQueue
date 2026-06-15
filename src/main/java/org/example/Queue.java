@@ -21,7 +21,7 @@ class Queue {
     } 
 
     int pop() {
-        if (head.next == null) {
+        if (isEmpty()) {
             throw new EmptyStackException();
         }
 
@@ -34,5 +34,9 @@ class Queue {
     void push(int val) {
         tail.next = new Node(val);
         tail = tail.next;
+    }
+
+    boolean isEmpty() {
+        return head.next == null;
     }
 }
