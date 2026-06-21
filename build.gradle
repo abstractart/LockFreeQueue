@@ -51,6 +51,9 @@ jmh {
     iterations = (project.findProperty('jmh.iterations') ?: '5') as Integer
     timeOnIteration = project.findProperty('jmh.time') ?: '2s'
     warmup = project.findProperty('jmh.warmup') ?: '1s'
+    if (project.hasProperty('jmh.threads')) {
+        threads = (project.property('jmh.threads')) as Integer
+    }
     resultFormat = 'JSON'
     profilers = ['gc']
     if (project.hasProperty('jmh.include')) {
