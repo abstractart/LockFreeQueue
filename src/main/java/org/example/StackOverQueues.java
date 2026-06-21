@@ -1,6 +1,5 @@
 package org.example;
 
-import java.util.EmptyStackException;
 import java.util.NoSuchElementException;
 
 public class StackOverQueues {

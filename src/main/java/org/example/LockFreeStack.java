@@ -1,7 +1,6 @@
 package org.example;
 
 import java.util.EmptyStackException;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class LockFreeStack {
     AtomicNode head;
