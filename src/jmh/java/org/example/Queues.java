@@ -5,18 +5,11 @@ final class Queues {
 
     static QueueOps create(String name) {
         return switch (name) {
-            case "Queue" -> new QueueAdapter();
             case "LockedQueue" -> new LockedQueueAdapter();
             case "ReentrantLockQueue" -> new ReentrantLockQueueAdapter();
             case "LockFreeQueue" -> new LockFreeQueueAdapter();
             default -> throw new IllegalArgumentException("Unknown queue impl: " + name);
         };
-    }
-
-    private static final class QueueAdapter implements QueueOps {
-        private final Queue q = new Queue();
-        public void push(int v) { q.push(v); }
-        public int pop() { return q.pop(); }
     }
 
     private static final class LockedQueueAdapter implements QueueOps {

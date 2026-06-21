@@ -44,13 +44,13 @@ test {
 
 jmh {
     // Sane defaults. Override per-run from the CLI:
-    //   ./gradlew jmh -Pjmh.include=StackSingleThreadBenchmark
+    //   ./gradlew jmh -Pjmh.include=StackContentionBenchmark
     //   ./gradlew jmh -Pjmh.fork=1 -Pjmh.iterations=3 -Pjmh.warmupIterations=2
-    fork = (project.findProperty('jmh.fork') ?: '2') as Integer
-    warmupIterations = (project.findProperty('jmh.warmupIterations') ?: '3') as Integer
-    iterations = (project.findProperty('jmh.iterations') ?: '5') as Integer
-    timeOnIteration = project.findProperty('jmh.time') ?: '2s'
-    warmup = project.findProperty('jmh.warmup') ?: '1s'
+    fork = (project.findProperty('jmh.fork') ?: '1') as Integer
+    warmupIterations = (project.findProperty('jmh.warmupIterations') ?: '2') as Integer
+    iterations = (project.findProperty('jmh.iterations') ?: '3') as Integer
+    timeOnIteration = project.findProperty('jmh.time') ?: '1s'
+    warmup = project.findProperty('jmh.warmup') ?: '500ms'
     if (project.hasProperty('jmh.threads')) {
         threads = (project.property('jmh.threads')) as Integer
     }
