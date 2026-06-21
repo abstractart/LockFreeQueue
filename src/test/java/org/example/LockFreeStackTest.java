@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.EmptyStackException;
 import java.util.HashSet;
@@ -18,11 +19,31 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LockFreeStackTest {
+
+    @Test
+    @DisplayName("isEmpty() корректно отражает состояние при последовательных операциях")
+    void isEmptyReflectsState() {
+        LockFreeStack stack = new LockFreeStack();
+        assertTrue(stack.isEmpty());
+
+        stack.push(1);
+        assertFalse(stack.isEmpty());
+
+        stack.push(2);
+        assertFalse(stack.isEmpty());
+
+        stack.pop();
+        assertFalse(stack.isEmpty());
+
+        stack.pop();
+        assertTrue(stack.isEmpty());
+    }
 
     @Test
     @DisplayName("pop() на новом стеке бросает EmptyStackException")
@@ -417,5 +438,156 @@ class LockFreeStackTest {
         Throwable failure = firstFailure.get();
         assertNull(failure,
                 "Конкурентный push не должен бросать исключения, но получили: " + failure);
+    }
+
+    @Test
+    @DisplayName("ABA Problem: устаревший CAS не проходит даже после полного A→B→A-цикла на вершине стека")
+    void abaProblemDeterministicScenario() {
+        LockFreeStack stack = new LockFreeStack();
+        stack.push(1);
+        stack.push(2);
+        stack.push(3);
+
+        // Снимок состояния «Потоком 1» прямо перед его CAS в pop():
+        // он считал dummyHead и текущую вершину realHead (node со значением 3),
+        // а затем «уснул» прямо перед compareAndSet.
+        AtomicNode dummyHead = stack.head;
+        AtomicNode staleTop = dummyHead.next.get();        // node(3) — то, что Поток 1 считает вершиной
+        AtomicNode staleTopNext = staleTop.next.get();      // node(2) — то, чем Поток 1 хочет заменить вершину
+
+        // «Поток 2» успевает выполнить классическую A→B→A-последовательность:
+        // снимает A (3) и B (2), а затем кладёт обратно значение A (3) — но уже в НОВОМ узле.
+        assertEquals(3, stack.pop());
+        assertEquals(2, stack.pop());
+        stack.push(3);
+
+        // «Поток 1» просыпается и пытается выполнить свой устаревший CAS.
+        // В наивной реализации с переиспользованием узлов он бы прошёл и потерял бы свежие данные.
+        // Здесь же каждый push аллоцирует новый AtomicNode — ссылка staleTop больше не вершина,
+        // и CAS обязан провалиться.
+        boolean staleCas = dummyHead.next.compareAndSet(staleTop, staleTopNext);
+        assertFalse(staleCas,
+                "Устаревший CAS не должен пройти: A→B→A создаёт новый узел, " +
+                        "поэтому ссылка вершины не совпадает с зафиксированной staleTop");
+
+        // Состояние стека не должно быть повреждено: на вершине должен лежать свежий узел со значением 3,
+        // а под ним — исходное значение 1.
+        assertEquals(3, stack.pop());
+        assertEquals(1, stack.pop());
+        assertThrows(EmptyStackException.class, stack::pop);
+    }
+
+    @Test
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
+    @DisplayName("ABA Problem: высокочастотный pop+push одних и тех же значений не приводит к потерям и дубликатам")
+    void abaProblemStressWorkload() throws InterruptedException {
+        LockFreeStack stack = new LockFreeStack();
+        int initialCount = 64;
+        for (int i = 0; i < initialCount; i++) {
+            stack.push(i);
+        }
+
+        int workers = 8;
+        int operationsPerWorker = 50_000;
+
+        ExecutorService pool = Executors.newFixedThreadPool(workers);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(workers);
+        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+
+        try {
+            for (int w = 0; w < workers; w++) {
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        for (int i = 0; i < operationsPerWorker; i++) {
+                            // pop + push одного и того же значения — это и есть A→B→A на вершине стека.
+                            // Если бы реализация была подвержена ABA, такая нагрузка с большой вероятностью
+                            // вызвала бы потерянные/задублированные значения.
+                            int v = stack.pop();
+                            stack.push(v);
+                        }
+                    } catch (Throwable t) {
+                        firstFailure.compareAndSet(null, t);
+                        if (t instanceof InterruptedException) {
+                            Thread.currentThread().interrupt();
+                        }
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            start.countDown();
+            assertTrue(done.await(45, TimeUnit.SECONDS), "Воркеры не завершились вовремя");
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertNull(firstFailure.get(),
+                "Под ABA-нагрузкой не должно быть исключений, но получили: " + firstFailure.get());
+
+        List<Integer> drained = new ArrayList<>(initialCount);
+        while (true) {
+            try {
+                drained.add(stack.pop());
+            } catch (EmptyStackException e) {
+                break;
+            }
+        }
+        Set<Integer> unique = new HashSet<>(drained);
+        assertEquals(initialCount, drained.size(),
+                "Общее количество элементов должно совпадать с начальным — никакое значение не должно пропасть или задублироваться");
+        assertEquals(initialCount, unique.size(),
+                "Все начальные значения должны присутствовать ровно по одному разу");
+        for (int i = 0; i < initialCount; i++) {
+            assertTrue(unique.contains(i),
+                    "Значение " + i + " потеряно — возможный признак ABA-повреждения");
+        }
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @DisplayName("Утечка памяти: после pop узлы становятся недостижимыми и собираются GC")
+    void poppedNodesAreEligibleForGC() throws InterruptedException {
+        LockFreeStack stack = new LockFreeStack();
+        int n = 1000;
+        for (int i = 0; i < n; i++) {
+            stack.push(i);
+        }
+
+        // Снимаем WeakReference на каждый узел в цепочке head -> n -> ... -> 1.
+        // Локальные сильные ссылки на узлы умрут вместе со стек-фреймом этого метода
+        // (после обнуления walker), и далее единственный путь к узлам — через head.next.
+        List<WeakReference<AtomicNode>> refs = new ArrayList<>(n);
+        AtomicNode walker = stack.head.next.get();
+        while (walker != null) {
+            refs.add(new WeakReference<>(walker));
+            walker = walker.next.get();
+        }
+        walker = null;
+        assertEquals(n, refs.size(), "Должны зафиксировать ровно n узлов перед слиянием");
+
+        // Полностью сливаем стек. Все узлы становятся отсоединёнными:
+        // head.next == null, и .next-цепочка между ними не удерживается извне.
+        for (int i = 0; i < n; i++) {
+            stack.pop();
+        }
+        assertTrue(stack.isEmpty(), "После слива стек должен быть пуст");
+
+        long alive = waitForGcUntilMostlyCollected(refs);
+        assertTrue(alive == 0,
+                "Все popped-узлы должны быть собраны GC, но осталось живых: " + alive +
+                        " — реализация удерживает ссылки на отсоединённые узлы (утечка)");
+    }
+
+    private static long waitForGcUntilMostlyCollected(List<WeakReference<AtomicNode>> refs)
+            throws InterruptedException {
+        long alive = refs.size();
+        for (int attempt = 0; attempt < 20 && alive > 0; attempt++) {
+            System.gc();
+            Thread.sleep(50);
+            alive = refs.stream().filter(r -> r.get() != null).count();
+        }
+        return alive;
     }
 }

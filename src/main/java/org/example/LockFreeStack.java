@@ -38,4 +38,8 @@ public class LockFreeStack {
            }
         }
     }
+
+    boolean isEmpty() {
+        return head.next.get() == null;
+    }
 }

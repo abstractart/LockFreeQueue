@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.EmptyStackException;
 import java.util.HashSet;
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -416,5 +418,188 @@ class LockFreeQueueTest {
         Throwable failure = firstFailure.get();
         assertNull(failure,
                 "Конкурентный push не должен бросать исключения, но получили: " + failure);
+    }
+
+    @Test
+    @DisplayName("ABA Problem: устаревший CAS в pop() не проходит после полного A→B→A-цикла на head")
+    void abaProblemDeterministicScenarioOnHead() {
+        LockFreeQueue queue = new LockFreeQueue();
+        queue.push(1);
+        queue.push(2);
+        queue.push(3);
+
+        // Снимок состояния «Потоком 1» прямо перед его CAS в pop():
+        // он считал currHead (текущий dummy) и result (следующий узел со значением 1),
+        // а затем «уснул» прямо перед head.compareAndSet.
+        AtomicNode staleHead = queue.head.get();
+        AtomicNode staleResult = staleHead.next.get();      // узел со значением 1
+
+        // «Поток 2» полностью опустошает очередь и заново её заполняет —
+        // классический A→B→A на head: позиция «головы» внешне выглядит так же, но узлы все новые.
+        assertEquals(1, queue.pop());
+        assertEquals(2, queue.pop());
+        assertEquals(3, queue.pop());
+        queue.push(7);
+        queue.push(8);
+
+        // «Поток 1» просыпается и пытается выполнить свой устаревший CAS.
+        // Если бы реализация была подвержена ABA, наивное сравнение совпавших ссылок
+        // увело бы head на уже отсоединённый узел и потеряло бы свежие данные.
+        boolean staleCas = queue.head.compareAndSet(staleHead, staleResult);
+        assertFalse(staleCas,
+                "Устаревший CAS не должен пройти: новые push создают новые узлы, " +
+                        "поэтому staleHead больше не является текущей головой очереди");
+
+        // Состояние очереди должно сохранить FIFO для свежих значений 7 и 8.
+        assertEquals(7, queue.pop());
+        assertEquals(8, queue.pop());
+        assertThrows(EmptyStackException.class, queue::pop);
+    }
+
+    @Test
+    @DisplayName("ABA Problem: устаревший CAS в push() не проходит после A→B→A на tail")
+    void abaProblemDeterministicScenarioOnTail() {
+        LockFreeQueue queue = new LockFreeQueue();
+        queue.push(1);
+
+        // Снимок состояния «Потоком 1» прямо перед его CAS в push():
+        // он считал currTail (узел со значением 1) и убедился, что currTail.next == null,
+        // а затем «уснул» прямо перед currTail.next.compareAndSet(null, candidate).
+        AtomicNode staleTail = queue.tail.get();
+        assertNull(staleTail.next.get(),
+                "Предусловие: в момент снимка tail.next должен быть null");
+
+        // «Поток 2» полностью опустошает и заново заполняет очередь — staleTail оказывается
+        // полностью отсоединённым от текущей структуры (A→B→A на tail).
+        assertEquals(1, queue.pop());
+        queue.push(2);
+        queue.push(3);
+
+        // Ключевое свойство анти-ABA: ссылка .next у уже отсоединённого узла НЕ сбрасывается обратно в null
+        // в реализациях push/pop. Поэтому устаревший CAS(null, candidate) на нём провалится.
+        AtomicNode candidate = new AtomicNode(999);
+        boolean staleCas = staleTail.next.compareAndSet(null, candidate);
+        assertFalse(staleCas,
+                "Устаревший CAS на отсоединённом tail не должен пройти — иначе candidate " +
+                        "был бы «привязан» к узлу, которого больше нет в очереди, и потерян");
+
+        // Текущее состояние очереди должно быть нетронуто: 2, затем 3.
+        assertEquals(2, queue.pop());
+        assertEquals(3, queue.pop());
+        assertThrows(EmptyStackException.class, queue::pop);
+    }
+
+    @Test
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
+    @DisplayName("ABA Problem: высокочастотный pop+push одних и тех же значений не приводит к потерям и дубликатам")
+    void abaProblemStressWorkload() throws InterruptedException {
+        LockFreeQueue queue = new LockFreeQueue();
+        int initialCount = 64;
+        for (int i = 0; i < initialCount; i++) {
+            queue.push(i);
+        }
+
+        int workers = 8;
+        int operationsPerWorker = 50_000;
+
+        ExecutorService pool = Executors.newFixedThreadPool(workers);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(workers);
+        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+
+        try {
+            for (int w = 0; w < workers; w++) {
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        for (int i = 0; i < operationsPerWorker; i++) {
+                            // pop из головы + push в хвост одного и того же значения — постоянное
+                            // движение значений по структуре, максимизирующее шансы спровоцировать
+                            // ABA-баг как на head, так и на tail.
+                            int v = queue.pop();
+                            queue.push(v);
+                        }
+                    } catch (Throwable t) {
+                        firstFailure.compareAndSet(null, t);
+                        if (t instanceof InterruptedException) {
+                            Thread.currentThread().interrupt();
+                        }
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            start.countDown();
+            assertTrue(done.await(45, TimeUnit.SECONDS), "Воркеры не завершились вовремя");
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertNull(firstFailure.get(),
+                "Под ABA-нагрузкой не должно быть исключений, но получили: " + firstFailure.get());
+
+        List<Integer> drained = new ArrayList<>(initialCount);
+        while (true) {
+            try {
+                drained.add(queue.pop());
+            } catch (EmptyStackException e) {
+                break;
+            }
+        }
+        Set<Integer> unique = new HashSet<>(drained);
+        assertEquals(initialCount, drained.size(),
+                "Общее количество элементов должно совпадать с начальным — никакое значение не должно пропасть или задублироваться");
+        assertEquals(initialCount, unique.size(),
+                "Все начальные значения должны присутствовать ровно по одному разу");
+        for (int i = 0; i < initialCount; i++) {
+            assertTrue(unique.contains(i),
+                    "Значение " + i + " потеряно — возможный признак ABA-повреждения");
+        }
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @DisplayName("Утечка памяти: после pop старые dummy/data-узлы становятся недостижимыми и собираются GC")
+    void poppedNodesAreEligibleForGC() throws InterruptedException {
+        LockFreeQueue queue = new LockFreeQueue();
+        int n = 1000;
+        for (int i = 0; i < n; i++) {
+            queue.push(i);
+        }
+
+        // Захватываем WeakReference на ВСЕ узлы в цепочке (включая текущий dummy-head),
+        // т.е. n+1 узел. После слива в очереди останется ровно один узел в роли head=tail
+        // (последний data-узел, ставший новым dummy), а все предыдущие должны стать GC-собираемыми.
+        List<WeakReference<AtomicNode>> refs = new ArrayList<>(n + 1);
+        AtomicNode walker = queue.head.get();
+        while (walker != null) {
+            refs.add(new WeakReference<>(walker));
+            walker = walker.next.get();
+        }
+        walker = null;
+        assertEquals(n + 1, refs.size(),
+                "Должны зафиксировать ровно n+1 узел (dummy + n data) перед сливом");
+
+        for (int i = 0; i < n; i++) {
+            queue.pop();
+        }
+
+        long alive = waitForGcUntilMostlyCollected(refs);
+        // Один узел всегда остаётся — он закреплён за head и tail (новый dummy).
+        assertTrue(alive <= 1,
+                "Должно остаться не более 1 живого узла (новый dummy=head=tail), " +
+                        "но осталось живых: " + alive +
+                        " — реализация удерживает ссылки на отсоединённые узлы (утечка)");
+    }
+
+    private static long waitForGcUntilMostlyCollected(List<WeakReference<AtomicNode>> refs)
+            throws InterruptedException {
+        long alive = refs.size();
+        for (int attempt = 0; attempt < 20 && alive > 1; attempt++) {
+            System.gc();
+            Thread.sleep(50);
+            alive = refs.stream().filter(r -> r.get() != null).count();
+        }
+        return alive;
     }
 }
