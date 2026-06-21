@@ -1,9 +1,6 @@
 package org.example;
 
-import jdk.jshell.spi.ExecutionControl;
-
 import java.util.EmptyStackException;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 class AtomicNode {
