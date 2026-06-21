@@ -19,6 +19,7 @@ repositories {
 dependencies {
     testImplementation platform('org.junit:junit-bom:6.0.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.jetbrains.lincheck:lincheck:3.6'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -29,6 +30,15 @@ jacoco {
 test {
     useJUnitPlatform()
     finalizedBy jacocoTestReport
+    jvmArgs(
+        '--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED',
+        '--add-opens=java.base/java.lang=ALL-UNNAMED',
+        '--add-opens=java.base/java.lang.reflect=ALL-UNNAMED',
+        '--add-opens=java.base/java.util=ALL-UNNAMED',
+        '--add-opens=java.base/jdk.internal.access=ALL-UNNAMED',
+        '--add-exports=java.base/jdk.internal.util=ALL-UNNAMED',
+        '--add-exports=java.base/sun.security.action=ALL-UNNAMED'
+    )
 }
 
 jacocoTestReport {
