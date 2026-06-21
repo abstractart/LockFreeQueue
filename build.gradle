@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     id 'jacoco'
+    id 'me.champeau.jmh' version '0.7.3'
 }
 
 group = 'org.example'
@@ -39,6 +40,22 @@ test {
         '--add-exports=java.base/jdk.internal.util=ALL-UNNAMED',
         '--add-exports=java.base/sun.security.action=ALL-UNNAMED'
     )
+}
+
+jmh {
+    // Sane defaults. Override per-run from the CLI:
+    //   ./gradlew jmh -Pjmh.include=StackSingleThreadBenchmark
+    //   ./gradlew jmh -Pjmh.fork=1 -Pjmh.iterations=3 -Pjmh.warmupIterations=2
+    fork = (project.findProperty('jmh.fork') ?: '2') as Integer
+    warmupIterations = (project.findProperty('jmh.warmupIterations') ?: '3') as Integer
+    iterations = (project.findProperty('jmh.iterations') ?: '5') as Integer
+    timeOnIteration = project.findProperty('jmh.time') ?: '2s'
+    warmup = project.findProperty('jmh.warmup') ?: '1s'
+    resultFormat = 'JSON'
+    profilers = ['gc']
+    if (project.hasProperty('jmh.include')) {
+        includes = [project.property('jmh.include')]
+    }
 }
 
 jacocoTestReport {
