@@ -432,7 +432,7 @@ class LockFreeQueueTest {
         // он считал currHead (текущий dummy) и result (следующий узел со значением 1),
         // а затем «уснул» прямо перед head.compareAndSet.
         AtomicNode staleHead = queue.head.get();
-        AtomicNode staleResult = staleHead.next.get();      // узел со значением 1
+        AtomicNode staleResult = staleHead.next;      // узел со значением 1
 
         // «Поток 2» полностью опустошает очередь и заново её заполняет —
         // классический A→B→A на head: позиция «головы» внешне выглядит так же, но узлы все новые.
@@ -464,9 +464,9 @@ class LockFreeQueueTest {
 
         // Снимок состояния «Потоком 1» прямо перед его CAS в push():
         // он считал currTail (узел со значением 1) и убедился, что currTail.next == null,
-        // а затем «уснул» прямо перед currTail.next.compareAndSet(null, candidate).
+        // а затем «уснул» прямо перед currTail.casNext(null, candidate).
         AtomicNode staleTail = queue.tail.get();
-        assertNull(staleTail.next.get(),
+        assertNull(staleTail.next,
                 "Предусловие: в момент снимка tail.next должен быть null");
 
         // «Поток 2» полностью опустошает и заново заполняет очередь — staleTail оказывается
@@ -478,7 +478,7 @@ class LockFreeQueueTest {
         // Ключевое свойство анти-ABA: ссылка .next у уже отсоединённого узла НЕ сбрасывается обратно в null
         // в реализациях push/pop. Поэтому устаревший CAS(null, candidate) на нём провалится.
         AtomicNode candidate = new AtomicNode(999);
-        boolean staleCas = staleTail.next.compareAndSet(null, candidate);
+        boolean staleCas = staleTail.casNext(null, candidate);
         assertFalse(staleCas,
                 "Устаревший CAS на отсоединённом tail не должен пройти — иначе candidate " +
                         "был бы «привязан» к узлу, которого больше нет в очереди, и потерян");
@@ -574,7 +574,7 @@ class LockFreeQueueTest {
         AtomicNode walker = queue.head.get();
         while (walker != null) {
             refs.add(new WeakReference<>(walker));
-            walker = walker.next.get();
+            walker = walker.next;
         }
         walker = null;
         assertEquals(n + 1, refs.size(),

@@ -12,31 +12,28 @@ public class LockFreeStack {
     void push(int val) {
         AtomicNode candidate = new AtomicNode(val);
         while (true) {
-            AtomicNode realHead = head.next.get();
-            candidate.next.set(realHead);
-            if (head.next.compareAndSet(realHead, candidate)) {
+            AtomicNode realHead = head.next;
+            candidate.next = realHead;
+            if (head.casNext(realHead, candidate)) {
                 return;
             }
         }
     }
 
     int pop() {
-        while(true) {
-            AtomicNode dummyHead = head;
-            AtomicNode realHead = dummyHead.next.get();
+        while (true) {
+            AtomicNode realHead = head.next;
             if (realHead == null) {
                 throw new EmptyStackException();
             }
-            AtomicNode newHead = realHead.next.get();
-
-
-            if (dummyHead.next.compareAndSet(realHead, newHead)) {
-               return realHead.val;
-           }
+            AtomicNode newHead = realHead.next;
+            if (head.casNext(realHead, newHead)) {
+                return realHead.val;
+            }
         }
     }
 
     boolean isEmpty() {
-        return head.next.get() == null;
+        return head.next == null;
     }
 }

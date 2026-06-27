@@ -1,15 +1,30 @@
 package org.example;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.EmptyStackException;
 import java.util.concurrent.atomic.AtomicReference;
 
 class AtomicNode {
     int val;
-    AtomicReference<AtomicNode> next;
+    volatile AtomicNode next;
+
+    private static final VarHandle NEXT;
+    static {
+        try {
+            NEXT = MethodHandles.lookup()
+                    .findVarHandle(AtomicNode.class, "next", AtomicNode.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     AtomicNode(int val) {
         this.val = val;
-        next = new AtomicReference<>(null);
+    }
+
+    boolean casNext(AtomicNode expected, AtomicNode update) {
+        return NEXT.compareAndSet(this, expected, update);
     }
 }
 
@@ -26,7 +41,7 @@ class LockFreeQueue {
     int pop() {
         while (true) {
             AtomicNode currHead = head.get();
-            AtomicNode result = currHead.next.get();
+            AtomicNode result = currHead.next;
 
             if (result == null) {
                 throw new EmptyStackException();
@@ -40,7 +55,7 @@ class LockFreeQueue {
     void push(int val) {
         while (true) {
             AtomicNode currTail = tail.get();
-            AtomicNode dirtyTail = currTail.next.get();
+            AtomicNode dirtyTail = currTail.next;
             AtomicNode candidate = new AtomicNode(val);
 
             if (dirtyTail != null) {
@@ -48,7 +63,7 @@ class LockFreeQueue {
                 continue;
             }
 
-            if (currTail.next.compareAndSet(null, candidate)) {
+            if (currTail.casNext(null, candidate)) {
                 tail.compareAndSet(currTail, candidate);
                 return;
             }
