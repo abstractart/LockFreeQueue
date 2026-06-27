@@ -53,7 +53,7 @@ Two benchmark shapes, both pre-fill the structure so `pop` rarely hits empty:
 |---|---:|---:|---:|---:|
 | `LockedStack` (`synchronized`) | 18.3 | 13.9 | 14.2 | 11.8 † |
 | `ReentrantLockStack` (non-fair) | 18.1 | **69.3** | **68.0** | **94.1** |
-| `LockFreeStack` | **28.5** | 15.6 | 3.9 | 26.2 |
+| `LockFreeStack` | **25.4** | 14.5 | 2.3 | 19.9 |
 
 ### Allocation (B/op, lower is better)
 
@@ -61,7 +61,7 @@ Two benchmark shapes, both pre-fill the structure so `pop` rarely hits empty:
 |---|---:|---:|---:|---:|
 | `LockedStack` | 24 | 24 | 24 | 318 † |
 | `ReentrantLockStack` | 32 | 24 | 24 | 14 |
-| `LockFreeStack` | 58 | 120 | **233** | 55 |
+| `LockFreeStack` | 40 | 40 | 40 | 24 |
 
 > † Under `synchronized`, producers are too slow to keep up with consumers,
 > so `pop()` starts throwing `EmptyStackException` (~500 B per throw). The
@@ -70,15 +70,18 @@ Two benchmark shapes, both pre-fill the structure so `pop` rarely hits empty:
 
 ### Findings
 
-- **At low contention (t=2) `LockFreeStack` is the clear winner** — 28.5 ops/μs
-  vs 18.3 for `synchronized`, 18.1 for `ReentrantLock`. CAS rarely needs to
-  retry, the cache line bounces only between two cores, and the per-op
-  allocation cost (58 B/op) is still tolerable.
-- **From t=4 onward `LockFreeStack` collapses** — 15.6 → 3.9 ops/μs at t=8.
-  Allocation explodes from 58 → 233 B/op over the same range, a ×4 amplification.
-  This is the classic retry-storm signature: under contention, most CAS attempts
-  fail, every failed attempt has already allocated a node, and the GC pressure
-  feeds back into more contention.
+- **At low contention (t=2) `LockFreeStack` still leads** — 25.4 ops/μs vs
+  18.3 for `synchronized`, 18.1 for `ReentrantLock`. CAS rarely needs to
+  retry, the cache line bounces only between two cores. Allocation is a
+  constant 40 B/op at any thread count (= one `AtomicNode` + its
+  `AtomicReference next` wrapper) after recommendation #1 was applied —
+  removing the previous amplification from 58 → 233 B/op.
+- **From t=4 onward `LockFreeStack` still collapses** — 14.5 → 2.3 ops/μs at
+  t=8. The fix removed the per-retry allocation but **did not recover
+  throughput** under high contention. The remaining bottleneck is not
+  allocation: it is cache-line bouncing on the shared `head.next` and the
+  absence of CAS back-off (recommendations #3-#4). Fix #1 alone is a
+  necessary but insufficient step.
 - **`synchronized` is the steady baseline** — flat ~13-14 ops/μs across t≥4,
   constant 24 B/op. Nothing surprising.
 - **`ReentrantLock` (non-fair) dominates the symmetric high-contention rows**
@@ -95,10 +98,10 @@ Two benchmark shapes, both pre-fill the structure so `pop` rarely hits empty:
 `LockFreeStack` loses to **both** `synchronized` and `ReentrantLock` at
 t≥4 in the symmetric workload. Four code-level issues account for that:
 
-1. **`new AtomicNode(val)` is inside the retry loop**
-   (`LockFreeStack.java:17`, inside `while(true)`). Every failed CAS
-   throws away a freshly allocated node. **Fix:** allocate once before
-   the loop, on retry only refresh `candidate.next`:
+1. **✅ Applied.** `new AtomicNode(val)` used to sit inside the retry loop
+   (`LockFreeStack.java`, inside `while(true)`); every failed CAS threw
+   away a freshly allocated node. Hoisted out of the loop, on retry only
+   `candidate.next` is refreshed:
 
    ```java
    void push(int val) {
@@ -111,9 +114,15 @@ t≥4 in the symmetric workload. Four code-level issues account for that:
    }
    ```
 
-   Expected effect: alloc drops back to ~24 B/op at any thread count
-   (one node per successful push, period). This alone should claw back
-   most of the t≥4 gap against `synchronized`.
+   **Measured effect:** allocation dropped from 58 / 120 / 233 B/op
+   (t=2/4/8) to a constant **40 B/op** at any thread count. The
+   remaining 40 B = one `AtomicNode` (24 B) + one `AtomicReference next`
+   wrapper (16 B); fix #2 below targets the wrapper. **Throughput was
+   not improved** by this fix alone (-7 to -41% on the symmetric
+   workload). That outcome itself was the value of measuring: it
+   disproves the original "retry storm is alloc-driven" interpretation
+   and pins the throughput collapse on fixes #3 (dummy head / cache-line
+   contention) and #4 (no back-off) instead.
 
 2. **Each `AtomicNode` wraps `next` in its own `AtomicReference` object**
    (`LockFreeQueue.java:8`). That is **two allocations per node**

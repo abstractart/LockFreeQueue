@@ -10,14 +10,11 @@ public class LockFreeStack {
     }
 
     void push(int val) {
+        AtomicNode candidate = new AtomicNode(val);
         while (true) {
-            AtomicNode dummyHead = head;
-            AtomicNode realHead = dummyHead.next.get();
-
-            AtomicNode candidate = new AtomicNode(val);
+            AtomicNode realHead = head.next.get();
             candidate.next.set(realHead);
-
-            if (dummyHead.next.compareAndSet(realHead, candidate)) {
+            if (head.next.compareAndSet(realHead, candidate)) {
                 return;
             }
         }
