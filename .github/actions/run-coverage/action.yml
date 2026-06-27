@@ -14,6 +14,10 @@ inputs:
     description: If 'true' and build.gradle lacks jacoco, skip with pct=0 and has-report=false.
     required: false
     default: 'false'
+  quick:
+    description: If 'true', pass -Pquick to Gradle (reduces Lincheck iterations for fast PR loops).
+    required: false
+    default: 'false'
 
 outputs:
   pct:
@@ -47,8 +51,12 @@ runs:
           echo "has_report=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
+        GRADLE_ARGS="test jacocoTestReport --no-daemon"
+        if [ "${{ inputs.quick }}" = "true" ]; then
+          GRADLE_ARGS="$GRADLE_ARGS -Pquick"
+        fi
         GRADLE_FAILED=0
-        ./gradlew test jacocoTestReport --no-daemon || GRADLE_FAILED=1
+        ./gradlew $GRADLE_ARGS || GRADLE_FAILED=1
         if [ -f build/reports/jacoco/test/jacocoTestReport.xml ]; then
           PCT=$(python3 "${{ inputs.script-path }}" build/reports/jacoco/test/jacocoTestReport.xml)
           echo "Coverage: ${PCT}%"

@@ -27,20 +27,20 @@ public class ReentrantLockQueueLincheckTest {
     @Test
     public void stressTest() {
         new StressOptions()
-                .iterations(50)
+                .iterations(LincheckConfig.ITERATIONS)
                 .threads(3)
                 .actorsPerThread(3)
-                .invocationsPerIteration(1000)
+                .invocationsPerIteration(LincheckConfig.INVOCATIONS_PER_ITERATION)
                 .check(this.getClass());
     }
 
     @Test
     public void modelCheckingTest() {
         new ModelCheckingOptions()
-                .iterations(50)
+                .iterations(LincheckConfig.ITERATIONS)
                 .threads(3)
                 .actorsPerThread(3)
-                .invocationsPerIteration(1000)
+                .invocationsPerIteration(LincheckConfig.INVOCATIONS_PER_ITERATION)
                 .check(this.getClass());
     }
 }
