@@ -19,7 +19,7 @@ Only the three thread-safe implementations are exercised. The non-thread-safe
 |---|---|---|
 | Blocking | `LockedStack`, `LockedQueue` | `synchronized` methods |
 | Blocking | `ReentrantLockStack`, `ReentrantLockQueue` | `ReentrantLock` (non-fair) |
-| Lock-free | `LockFreeStack`, `LockFreeQueue` | CAS on container head/tail via `AtomicReference`, on node `next` via `VarHandle` |
+| Lock-free | `LockFreeStack`, `LockFreeQueue` | CAS on container head/tail via `AtomicReference`, on node `next` via `AtomicReferenceFieldUpdater` |
 
 ## Methodology
 
@@ -128,9 +128,11 @@ t≥4 in the symmetric workload. Four code-level issues account for that:
 2. **✅ Applied.** Each `AtomicNode` used to wrap `next` in its own
    `AtomicReference` object — two allocations per node and an extra
    pointer hop on every traversal. Replaced with `volatile AtomicNode
-   next` + a static `VarHandle` for CAS, exposing `casNext(expected,
-   update)`. This is the pattern `ConcurrentLinkedQueue` uses in the
-   JDK; identical semantics, half the indirection.
+   next` + a static `AtomicReferenceFieldUpdater` for CAS, exposing
+   `casNext(expected, update)`. (`VarHandle` would give the same
+   semantics but requires a try/catch around `findVarHandle` that
+   JaCoCo cannot fully cover; ARFU's `newUpdater` is a single
+   expression.)
 
    **Measured effect:** allocation dropped further from 40 B/op to a
    constant **24 B/op** at any thread count — the irreducible cost of

@@ -1,23 +1,15 @@
 package org.example;
 
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
 import java.util.EmptyStackException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 class AtomicNode {
     int val;
     volatile AtomicNode next;
 
-    private static final VarHandle NEXT;
-    static {
-        try {
-            NEXT = MethodHandles.lookup()
-                    .findVarHandle(AtomicNode.class, "next", AtomicNode.class);
-        } catch (ReflectiveOperationException e) {
-            throw new ExceptionInInitializerError(e);
-        }
-    }
+    private static final AtomicReferenceFieldUpdater<AtomicNode, AtomicNode> NEXT =
+            AtomicReferenceFieldUpdater.newUpdater(AtomicNode.class, AtomicNode.class, "next");
 
     AtomicNode(int val) {
         this.val = val;
