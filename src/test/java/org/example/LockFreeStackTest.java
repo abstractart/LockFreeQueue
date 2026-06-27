@@ -17,6 +17,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -25,6 +26,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LockFreeStackTest {
+
+    // For the ABA test below: we need to perform a stale CAS on the stack's head field
+    // from outside the implementation. Mirrors the production-side ARFU on the same field.
+    private static final AtomicReferenceFieldUpdater<LockFreeStack, AtomicNode> STACK_HEAD =
+            AtomicReferenceFieldUpdater.newUpdater(LockFreeStack.class, AtomicNode.class, "head");
 
     @Test
     @DisplayName("isEmpty() корректно отражает состояние при последовательных операциях")
@@ -449,11 +455,10 @@ class LockFreeStackTest {
         stack.push(3);
 
         // Снимок состояния «Потоком 1» прямо перед его CAS в pop():
-        // он считал dummyHead и текущую вершину realHead (node со значением 3),
+        // он считал head (текущую вершину, node со значением 3) и подготовил newTop = head.next (node 2),
         // а затем «уснул» прямо перед compareAndSet.
-        AtomicNode dummyHead = stack.head;
-        AtomicNode staleTop = dummyHead.next;        // node(3) — то, что Поток 1 считает вершиной
-        AtomicNode staleTopNext = staleTop.next;      // node(2) — то, чем Поток 1 хочет заменить вершину
+        AtomicNode staleTop = stack.head;             // node(3) — то, что Поток 1 считает вершиной
+        AtomicNode staleTopNext = staleTop.next;       // node(2) — то, чем Поток 1 хочет заменить вершину
 
         // «Поток 2» успевает выполнить классическую A→B→A-последовательность:
         // снимает A (3) и B (2), а затем кладёт обратно значение A (3) — но уже в НОВОМ узле.
@@ -465,7 +470,7 @@ class LockFreeStackTest {
         // В наивной реализации с переиспользованием узлов он бы прошёл и потерял бы свежие данные.
         // Здесь же каждый push аллоцирует новый AtomicNode — ссылка staleTop больше не вершина,
         // и CAS обязан провалиться.
-        boolean staleCas = dummyHead.casNext(staleTop, staleTopNext);
+        boolean staleCas = STACK_HEAD.compareAndSet(stack, staleTop, staleTopNext);
         assertFalse(staleCas,
                 "Устаревший CAS не должен пройти: A→B→A создаёт новый узел, " +
                         "поэтому ссылка вершины не совпадает с зафиксированной staleTop");
@@ -555,11 +560,11 @@ class LockFreeStackTest {
             stack.push(i);
         }
 
-        // Снимаем WeakReference на каждый узел в цепочке head -> n -> ... -> 1.
+        // Снимаем WeakReference на каждый узел в цепочке head -> ... -> 0.
         // Локальные сильные ссылки на узлы умрут вместе со стек-фреймом этого метода
-        // (после обнуления walker), и далее единственный путь к узлам — через head.next.
+        // (после обнуления walker), и далее единственный путь к узлам — через head.
         List<WeakReference<AtomicNode>> refs = new ArrayList<>(n);
-        AtomicNode walker = stack.head.next;
+        AtomicNode walker = stack.head;
         while (walker != null) {
             refs.add(new WeakReference<>(walker));
             walker = walker.next;
@@ -568,7 +573,7 @@ class LockFreeStackTest {
         assertEquals(n, refs.size(), "Должны зафиксировать ровно n узлов перед слиянием");
 
         // Полностью сливаем стек. Все узлы становятся отсоединёнными:
-        // head.next == null, и .next-цепочка между ними не удерживается извне.
+        // head == null, и .next-цепочка между ними не удерживается извне.
         for (int i = 0; i < n; i++) {
             stack.pop();
         }
