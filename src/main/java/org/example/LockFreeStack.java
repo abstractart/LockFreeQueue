@@ -1,20 +1,20 @@
 package org.example;
 
 import java.util.EmptyStackException;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 public class LockFreeStack {
-    AtomicNode head;
+    volatile AtomicNode head;
 
-    LockFreeStack() {
-        head = new AtomicNode(0);
-    }
+    private static final AtomicReferenceFieldUpdater<LockFreeStack, AtomicNode> HEAD =
+            AtomicReferenceFieldUpdater.newUpdater(LockFreeStack.class, AtomicNode.class, "head");
 
     void push(int val) {
         AtomicNode candidate = new AtomicNode(val);
         while (true) {
-            AtomicNode realHead = head.next;
-            candidate.next = realHead;
-            if (head.casNext(realHead, candidate)) {
+            AtomicNode currentTop = head;
+            candidate.next = currentTop;
+            if (HEAD.compareAndSet(this, currentTop, candidate)) {
                 return;
             }
         }
@@ -22,18 +22,18 @@ public class LockFreeStack {
 
     int pop() {
         while (true) {
-            AtomicNode realHead = head.next;
-            if (realHead == null) {
+            AtomicNode currentTop = head;
+            if (currentTop == null) {
                 throw new EmptyStackException();
             }
-            AtomicNode newHead = realHead.next;
-            if (head.casNext(realHead, newHead)) {
-                return realHead.val;
+            AtomicNode newTop = currentTop.next;
+            if (HEAD.compareAndSet(this, currentTop, newTop)) {
+                return currentTop.val;
             }
         }
     }
 
     boolean isEmpty() {
-        return head.next == null;
+        return head == null;
     }
 }

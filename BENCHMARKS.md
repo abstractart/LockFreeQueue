@@ -145,12 +145,22 @@ t≥4 in the symmetric workload. Four code-level issues account for that:
    thread counts; the remaining gap to `synchronized`/`ReentrantLock`
    at t≥4 is what #3 and #4 target.
 
-3. **`head` is a permanent dummy node**, and CASes go through `head.next`
-   (`LockFreeStack.java:6-9, 20`). The canonical Treiber stack uses
-   `AtomicReference<Node> head` directly — the top of the stack *is*
-   the head reference, no sentinel. **Fix:** drop the dummy, make `head`
-   the volatile/VarHandle field of (2). Saves one indirection on the
-   hot path.
+3. **✅ Applied.** `head` was a permanent dummy `AtomicNode`, and all
+   CAS operations went through `head.next` on it. Sentinel removed:
+   `head` is now a `volatile AtomicNode` field directly on
+   `LockFreeStack`, CAS'd via a class-level
+   `AtomicReferenceFieldUpdater`. Empty stack now costs zero bytes (was
+   24 B for the dummy); `push`/`pop` CAS the top reference directly
+   instead of `head.next`.
+
+   **Measured effect:** throughput and allocation both stayed within
+   noise (t=2 27.5 → 28.7 ±2.6, t=4 13.0 → 13.4 ±0.5, t=8 3.5 → 3.2
+   ±0.5, contention 22.5 → 23.0 ±3.0; alloc unchanged at 24 B/op).
+   The promised "one fewer indirection on the hot path" is real but
+   the JIT was apparently already speculating through it after warmup.
+   Net wins are non-throughput: canonical Treiber-stack shape, simpler
+   to reason about, prerequisite for fix #4 (a back-off scheme works
+   directly against the top reference, not a sentinel's `next`).
 
 4. **No back-off on CAS failure** — the loop spins flat-out on a
    contended cache line. At t=8 this is the dominant cost after (1)
@@ -159,12 +169,17 @@ t≥4 in the symmetric workload. Four code-level issues account for that:
    `Thread.yield()` if contention persists. This is the lever that
    closes the gap against `ReentrantLock`'s barging.
 
-(1)+(2)+(3) bring the implementation to a canonical, well-known design and
-should restore parity with `synchronized` at t=4 and approach `synchronized`
-at t=8. Beating non-fair `ReentrantLock`'s barging at t=8 on a tight
-`push+pop` micro-benchmark is a harder problem — typically solved with
-elimination arrays or other contention-reduction structures, not a one-line
-patch.
+Fixes (1)+(2)+(3) brought `LockFreeStack` to canonical Treiber-stack
+form (one node per push, no sentinel, ARFU-based CAS) — but throughput
+at t≥4 has **not** recovered toward `synchronized`'s ~13-14 ops/μs:
+`LockFreeStack` still sits at ~3 ops/μs at t=8. The original BENCHMARKS
+prediction that allocation-related fixes alone would close the gap
+turned out to be wrong; the t≥4 collapse is cache-line contention on
+the single `head` reference plus the absence of CAS back-off. Fix #4
+(back-off) is the next lever. Beating non-fair `ReentrantLock`'s
+barging at t=8 on a tight `push+pop` micro-benchmark is a harder
+problem — typically solved with elimination arrays or other
+contention-reduction structures, not a one-line patch.
 
 ---
 
