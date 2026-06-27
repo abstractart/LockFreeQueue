@@ -452,8 +452,8 @@ class LockFreeStackTest {
         // он считал dummyHead и текущую вершину realHead (node со значением 3),
         // а затем «уснул» прямо перед compareAndSet.
         AtomicNode dummyHead = stack.head;
-        AtomicNode staleTop = dummyHead.next.get();        // node(3) — то, что Поток 1 считает вершиной
-        AtomicNode staleTopNext = staleTop.next.get();      // node(2) — то, чем Поток 1 хочет заменить вершину
+        AtomicNode staleTop = dummyHead.next;        // node(3) — то, что Поток 1 считает вершиной
+        AtomicNode staleTopNext = staleTop.next;      // node(2) — то, чем Поток 1 хочет заменить вершину
 
         // «Поток 2» успевает выполнить классическую A→B→A-последовательность:
         // снимает A (3) и B (2), а затем кладёт обратно значение A (3) — но уже в НОВОМ узле.
@@ -465,7 +465,7 @@ class LockFreeStackTest {
         // В наивной реализации с переиспользованием узлов он бы прошёл и потерял бы свежие данные.
         // Здесь же каждый push аллоцирует новый AtomicNode — ссылка staleTop больше не вершина,
         // и CAS обязан провалиться.
-        boolean staleCas = dummyHead.next.compareAndSet(staleTop, staleTopNext);
+        boolean staleCas = dummyHead.casNext(staleTop, staleTopNext);
         assertFalse(staleCas,
                 "Устаревший CAS не должен пройти: A→B→A создаёт новый узел, " +
                         "поэтому ссылка вершины не совпадает с зафиксированной staleTop");
@@ -559,10 +559,10 @@ class LockFreeStackTest {
         // Локальные сильные ссылки на узлы умрут вместе со стек-фреймом этого метода
         // (после обнуления walker), и далее единственный путь к узлам — через head.next.
         List<WeakReference<AtomicNode>> refs = new ArrayList<>(n);
-        AtomicNode walker = stack.head.next.get();
+        AtomicNode walker = stack.head.next;
         while (walker != null) {
             refs.add(new WeakReference<>(walker));
-            walker = walker.next.get();
+            walker = walker.next;
         }
         walker = null;
         assertEquals(n, refs.size(), "Должны зафиксировать ровно n узлов перед слиянием");

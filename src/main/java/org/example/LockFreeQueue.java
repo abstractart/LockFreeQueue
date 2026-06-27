@@ -2,14 +2,21 @@ package org.example;
 
 import java.util.EmptyStackException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 class AtomicNode {
     int val;
-    AtomicReference<AtomicNode> next;
+    volatile AtomicNode next;
+
+    private static final AtomicReferenceFieldUpdater<AtomicNode, AtomicNode> NEXT =
+            AtomicReferenceFieldUpdater.newUpdater(AtomicNode.class, AtomicNode.class, "next");
 
     AtomicNode(int val) {
         this.val = val;
-        next = new AtomicReference<>(null);
+    }
+
+    boolean casNext(AtomicNode expected, AtomicNode update) {
+        return NEXT.compareAndSet(this, expected, update);
     }
 }
 
@@ -26,7 +33,7 @@ class LockFreeQueue {
     int pop() {
         while (true) {
             AtomicNode currHead = head.get();
-            AtomicNode result = currHead.next.get();
+            AtomicNode result = currHead.next;
 
             if (result == null) {
                 throw new EmptyStackException();
@@ -40,7 +47,7 @@ class LockFreeQueue {
     void push(int val) {
         while (true) {
             AtomicNode currTail = tail.get();
-            AtomicNode dirtyTail = currTail.next.get();
+            AtomicNode dirtyTail = currTail.next;
             AtomicNode candidate = new AtomicNode(val);
 
             if (dirtyTail != null) {
@@ -48,7 +55,7 @@ class LockFreeQueue {
                 continue;
             }
 
-            if (currTail.next.compareAndSet(null, candidate)) {
+            if (currTail.casNext(null, candidate)) {
                 tail.compareAndSet(currTail, candidate);
                 return;
             }
