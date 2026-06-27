@@ -8,10 +8,18 @@ on:
     branches:
       - '**'
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   test:
     name: Run tests
     runs-on: ubuntu-latest
+
+    outputs:
+      pct: ${{ steps.cov.outputs.pct }}
+      has-report: ${{ steps.cov.outputs.has-report }}
 
     steps:
       - name: Checkout
@@ -32,6 +40,18 @@ jobs:
             echo "Download the **coverage-report** artifact from the run summary and open \`index.html\` to drill into per-class / per-line coverage."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Write coverage pct file
+        if: steps.cov.outputs.has-report == 'true'
+        run: echo "${{ steps.cov.outputs.pct }}" > coverage-pct.txt
+
+      - name: Upload coverage pct (consumed by Coverage check on PRs)
+        if: steps.cov.outputs.has-report == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-pct
+          path: coverage-pct.txt
+          retention-days: 90
+
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
@@ -51,65 +71,72 @@ jobs:
   coverage-check:
     name: Coverage check
     if: github.event_name == 'pull_request'
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout base
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: base
-
-      - name: Checkout head
-        uses: actions/checkout@v4
-        with:
-          path: head
-
-      - name: Compute base coverage
+      - name: Fetch baseline coverage from latest successful main run
         id: base
-        uses: ./head/.github/actions/run-coverage
-        with:
-          working-directory: base
-          script-path: ../head/.github/scripts/jacoco_coverage.py
-          skip-if-no-jacoco: 'true'
-
-      - name: Upload base coverage report
-        if: always() && steps.base.outputs.has-report == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report-base
-          path: base/build/reports/jacoco/test
-          if-no-files-found: ignore
-
-      - name: Compute head coverage
-        id: head
-        uses: ./head/.github/actions/run-coverage
-        with:
-          working-directory: head
-
-      - name: Upload head coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report-head
-          path: head/build/reports/jacoco/test
-          if-no-files-found: ignore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN_ID=$(gh run list \
+            --branch main \
+            --workflow Tests \
+            --status success \
+            --limit 1 \
+            --repo "${{ github.repository }}" \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "::warning::No successful main run found — skipping coverage gate."
+            echo "pct=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p base-cov
+          if ! gh run download "$RUN_ID" \
+              --name coverage-pct \
+              --dir base-cov \
+              --repo "${{ github.repository }}"; then
+            echo "::warning::No coverage-pct artifact on main run $RUN_ID — skipping gate."
+            echo "pct=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BASE_PCT=$(tr -d '[:space:]' < base-cov/coverage-pct.txt)
+          echo "Baseline (main run $RUN_ID): ${BASE_PCT}%"
+          echo "pct=$BASE_PCT" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Compare coverage
+        env:
+          BASE: ${{ steps.base.outputs.pct }}
+          HEAD: ${{ needs.test.outputs.pct }}
+          BASE_RUN: ${{ steps.base.outputs.run_id }}
         run: |
-          BASE="${{ steps.base.outputs.pct }}"
-          HEAD="${{ steps.head.outputs.pct }}"
-          echo "Base coverage: ${BASE}%"
+          set -euo pipefail
+          if [ -z "$BASE" ]; then
+            {
+              echo "### Coverage gate"
+              echo ""
+              echo "Baseline coverage from main is not yet available — gate skipped."
+              echo ""
+              echo "Head coverage: ${HEAD}%"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Baseline unavailable — gate skipped (head was ${HEAD}%)."
+            exit 0
+          fi
+          echo "Base coverage: ${BASE}% (from main run ${BASE_RUN})"
           echo "Head coverage: ${HEAD}%"
           {
             echo "### Coverage diff"
             echo ""
             echo "| Branch | Coverage |"
             echo "|--------|----------|"
-            echo "| base   | ${BASE}% |"
-            echo "| head   | ${HEAD}% |"
+            echo "| base (main run [${BASE_RUN}](../../actions/runs/${BASE_RUN})) | ${BASE}% |"
+            echo "| head | ${HEAD}% |"
             echo ""
-            echo "Download **coverage-report-base** and **coverage-report-head** artifacts from this run to compare per-class / per-line coverage and find regressions."
+            echo "Baseline comes from the most recent successful Tests run on main — no re-build needed."
           } >> "$GITHUB_STEP_SUMMARY"
           python3 - <<PY
           base = float("$BASE")
