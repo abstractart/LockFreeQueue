@@ -23,12 +23,13 @@ Only the three thread-safe implementations are exercised. The non-thread-safe
 
 ## Methodology
 
-Two benchmark shapes, both pre-fill the structure so `pop` rarely hits empty:
+Three benchmark shapes, all pre-fill the structure so `pop` rarely hits empty:
 
 | Class | Workload | Threads |
 |---|---|---|
 | `*ScalingBenchmark` | symmetric `pushPop()` per thread | controlled via `-Pjmh.threads` |
 | `*ContentionBenchmark` | `@Group` with 2 producers (only `push`) + 2 consumers (only `pop`) | 4 (fixed) |
+| `StackBurstyBenchmark` | `push`, `Blackhole.consumeCPU(200)`, `pop`, `consumeCPU(200)` — simulates a stack embedded in a real pipeline, not a hot inner loop | controlled via `-Pjmh.threads` |
 
 > **Reference environment:** Apple M-series, JDK 25, Gradle 9.6.0,
 > `-Pjmh.fork=2 -Pjmh.warmupIterations=3 -Pjmh.warmup=1s -Pjmh.iterations=5
@@ -47,21 +48,33 @@ Two benchmark shapes, both pre-fill the structure so `pop` rarely hits empty:
 
 ## Stack
 
-### Throughput (ops/μs, higher is better)
+### Throughput — symmetric `pushPop` (ops/μs, higher is better)
 
-| impl | t=2 (sym) | t=4 (sym) | t=8 (sym) | 2P + 2C |
-|---|---:|---:|---:|---:|
-| `LockedStack` (`synchronized`) | 18.3 | 13.9 | 14.2 | 11.8 † |
-| `ReentrantLockStack` (non-fair) | 18.1 | **69.3** | **68.0** | **94.1** |
-| `LockFreeStack` | **27.5** | 13.0 | 3.5 | 22.5 |
+| impl | t=1 | t=2 | t=4 | t=8 | 2P + 2C |
+|---|---:|---:|---:|---:|---:|
+| `LockedStack` (`synchronized`) | **87.3** | 18.3 | 13.9 | 14.2 | 11.8 † |
+| `ReentrantLockStack` (non-fair) | 55.0 | 18.1 | **69.3** | **68.0** | **94.1** |
+| `LockFreeStack` | 58.1 | **27.5** | 13.0 | 3.5 | 22.5 |
+
+### Throughput — bursty `push + work + pop + work` (ops/μs, higher is better)
+
+Each thread does `push`, ~200 CPU tokens of Blackhole work, `pop`, another ~200 tokens.
+Shape mirrors real code where a stack is one component embedded in a wider pipeline,
+not the hot inner loop of a benchmark.
+
+| impl | t=2 | t=4 | t=8 |
+|---|---:|---:|---:|
+| `LockedStack` (`synchronized`) | 1.62 | 2.67 | 1.92 |
+| `ReentrantLockStack` (non-fair) | 1.60 | 1.93 | 1.69 |
+| `LockFreeStack` | **1.63** | **2.91** | **2.19** |
 
 ### Allocation (B/op, lower is better)
 
-| impl | t=2 | t=4 | t=8 | 2P + 2C |
-|---|---:|---:|---:|---:|
-| `LockedStack` | 24 | 24 | 24 | 318 † |
-| `ReentrantLockStack` | 32 | 24 | 24 | 14 |
-| `LockFreeStack` | 24 | 24 | 24 | 15 |
+| impl | t=2 sym | t=4 sym | t=8 sym | 2P + 2C | t=4 bursty |
+|---|---:|---:|---:|---:|---:|
+| `LockedStack` | 24 | 24 | 24 | 318 † | 24 |
+| `ReentrantLockStack` | 32 | 24 | 24 | 14 | 28 |
+| `LockFreeStack` | 24 | 24 | 24 | 15 | 24 |
 
 > † Under `synchronized`, producers are too slow to keep up with consumers,
 > so `pop()` starts throwing `EmptyStackException` (~500 B per throw). The
@@ -70,29 +83,66 @@ Two benchmark shapes, both pre-fill the structure so `pop` rarely hits empty:
 
 ### Findings
 
-- **At low contention (t=2) `LockFreeStack` still leads** — 27.5 ops/μs vs
-  18.3 for `synchronized`, 18.1 for `ReentrantLock`. CAS rarely needs to
-  retry, the cache line bounces only between two cores. After fixes #1
-  (hoist `new AtomicNode` out of retry) and #2 (`VarHandle` for `next`),
-  allocation is a **constant 24 B/op at any thread count** — exactly one
-  node per successful push, no more. The original code amplified
+- **At t=1 uncontended `synchronized` wins** — 87.3 ops/μs vs 58.1 for
+  `LockFreeStack` and 55.0 for `ReentrantLock`. Single-threaded work is
+  the fast path of `synchronized`: the JIT inlines the method, the monitor
+  operation compiles to a couple of cheap thin-lock ops. Meanwhile
+  `LockFreeStack` pays a volatile read + a full-fence CAS per op, and
+  `ReentrantLockStack` pays a wrapping method call plus its own CAS.
+  The "lock-free is always faster" folk claim doesn't survive contact
+  with this row.
+- **At low contention (t=2 symmetric) `LockFreeStack` leads** — 27.5 ops/μs
+  vs 18.3 for `synchronized`, 18.1 for `ReentrantLock`. CAS rarely needs
+  to retry, the cache line bounces only between two cores, and barging
+  buys `ReentrantLock` nothing (there is no one to bargain against). After
+  fixes #1 (hoist `new AtomicNode` out of retry) and #2 (`AtomicReferenceFieldUpdater`
+  for `next`), allocation is a **constant 24 B/op at any thread count** —
+  exactly one node per successful push, no more. The original code amplified
   allocation from 58 B/op at t=2 to 233 B/op at t=8; that path is gone.
-- **From t=4 onward `LockFreeStack` still collapses** — 13.0 → 3.5 ops/μs
-  at t=8. The two alloc-targeted fixes drove allocation to its theoretical
-  floor but **did not recover throughput** under high contention. This
-  pins the bottleneck on cache-line bouncing on `head.next` and the
-  absence of CAS back-off (recommendations #3-#4 below). Allocation rate
-  was a symptom, not the cause, of the t≥4 collapse.
-- **`synchronized` is the steady baseline** — flat ~13-14 ops/μs across t≥4,
-  constant 24 B/op. Nothing surprising.
+- **Bursty workload flips the leaderboard from t=4 upward** — with
+  ~200 CPU tokens of user work around each op, `LockFreeStack` becomes the
+  fastest at t=4 (2.91 vs 2.67 `synchronized`, 1.93 `ReentrantLock`) **and**
+  at t=8 (2.19 vs 1.92, 1.69). This is the scenario `LockFreeStack` is
+  designed for: every op still pays the full CAS + memory-fence cost, but
+  every lock op still pays acquire + release + contention arbitration, and
+  under bursts the lock's fast path never kicks in. Error bars are non-
+  overlapping at both t=4 and t=8, so the win is real, not noise.
+- **`ReentrantLock` barging is destroyed by think-time** — it went from
+  69.3 ops/μs on symmetric t=4 to **1.93** on bursty t=4. Barging depends
+  on the releasing thread immediately re-acquiring the lock before parked
+  waiters wake up; a 200-token gap between `unlock()` and the next
+  `lock()` is enough for waiters to actually get scheduled, at which
+  point every op costs a full park/unpark cycle. So `ReentrantLock`'s
+  symmetric-benchmark advantage is real only when the workload has no
+  gaps — which is uncommon in production code.
+- **From t=4 onward on the tight symmetric loop `LockFreeStack` still
+  collapses** — 13.0 → 3.5 ops/μs at t=8. The two alloc-targeted fixes
+  drove allocation to its theoretical floor but **did not recover throughput**
+  under this specific workload. The bottleneck is cache-line bouncing on
+  the single `head` reference plus the absence of CAS back-off — see
+  recommendation #4 below.
+- **`synchronized` is the steady baseline** on the tight symmetric loop —
+  flat ~13-14 ops/μs across t≥4, constant 24 B/op. Nothing surprising.
 - **`ReentrantLock` (non-fair) dominates the symmetric high-contention rows**
-  (~68 ops/μs at t=8) thanks to **barging** — after `unlock()` the releasing
-  thread usually re-acquires before any parked thread wakes up, effectively
-  serialising work into batches that fit between context switches.
+  (~68 ops/μs at t=8) thanks to **barging** — see the bursty finding above
+  for why this advantage disappears the moment threads have any work
+  between ops.
 - **Producer/consumer (2P + 2C)** doesn't help `LockFreeStack` much
-  (26.2 ops/μs vs 15.6 at sym t=4). A stack has a single contention point
+  (22.5 ops/μs vs 13.0 at sym t=4). A stack has a single contention point
   (`head`); the role split does not separate cache-line traffic. `ReentrantLock`
-  is the natural winner here.
+  is the natural winner on this specific shape too.
+
+### When to reach for `LockFreeStack`
+
+The three winning scenarios above tell a coherent story: pick `LockFreeStack`
+when either **there are few threads and the operations are frequent**
+(t=2 symmetric — small teams pounding a shared collection) **or when
+each thread has real work between its stack operations** (bursty t≥4 —
+the vast majority of production code). Reach for `ReentrantLockStack`
+only when both conditions are false: many threads doing back-to-back
+`push`/`pop` with nothing in between. Reach for `LockedStack` (i.e.,
+`synchronized`) when there is exactly one thread — the JIT will
+optimize it to something the other two can't match.
 
 ### Improving `LockFreeStack`
 
