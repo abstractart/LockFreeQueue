@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit;
 @Fork(2)
 public class StackBurstyBenchmark {
 
-    @Param({"LockedStack", "ReentrantLockStack", "LockFreeStack"})
+    @Param({"LockedStack", "ReentrantLockStack", "LockFreeStack", "EliminationStack"})
     public String impl;
 
     // Blackhole.consumeCPU tokens между операциями стека. 200 ≈ порядка

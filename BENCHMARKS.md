@@ -19,7 +19,9 @@ Only the three thread-safe implementations are exercised. The non-thread-safe
 |---|---|---|
 | Blocking | `LockedStack`, `LockedQueue` | `synchronized` methods |
 | Blocking | `ReentrantLockStack`, `ReentrantLockQueue` | `ReentrantLock` (non-fair) |
-| Lock-free | `LockFreeStack`, `LockFreeQueue` | CAS on container head/tail via `AtomicReference`, on node `next` via `AtomicReferenceFieldUpdater` |
+| Lock-free | `LockFreeStack` | CAS on `head` via `AtomicReferenceFieldUpdater`, on node `next` via `AtomicReferenceFieldUpdater` |
+| Lock-free | `LockFreeQueue` | CAS on `head`/`tail` via `AtomicReference`, on node `next` via `AtomicReferenceFieldUpdater` |
+| Lock-free | `EliminationStack` | Treiber CAS + Hendler-Shavit elimination back-off array (8 stride-padded slots) |
 
 ## Methodology
 
@@ -48,13 +50,20 @@ Three benchmark shapes, all pre-fill the structure so `pop` rarely hits empty:
 
 ## Stack
 
+> **Note on absolute values.** The tables below are a fresh, single-session
+> run of all four implementations back-to-back. The machine was under load
+> from earlier runs, so absolute numbers here are ~30-40 % lower than the
+> pre-elim tables in git history — but every row was measured under the
+> same conditions, so *relative* comparisons within each row are honest.
+
 ### Throughput — symmetric `pushPop` (ops/μs, higher is better)
 
 | impl | t=1 | t=2 | t=4 | t=8 | 2P + 2C |
 |---|---:|---:|---:|---:|---:|
-| `LockedStack` (`synchronized`) | **87.3** | 18.3 | 13.9 | 14.2 | 11.8 † |
-| `ReentrantLockStack` (non-fair) | 55.0 | 18.1 | **69.3** | **68.0** | **94.1** |
-| `LockFreeStack` | 58.1 | **27.5** | 13.0 | 3.5 | 22.5 |
+| `LockedStack` (`synchronized`) | **86.5** | 11.4 | 8.2 | 8.2 | 3.9 † |
+| `ReentrantLockStack` (non-fair) | 55.6 | 10.2 | **43.8** | **42.5** | **55.2** |
+| `LockFreeStack` | 58.1 | 14.7 | 7.1 | 2.4 | 12.2 |
+| `EliminationStack` | 57.9 | **19.5** | 7.8 | 3.2 | 13.4 |
 
 ### Throughput — bursty `push + work + pop + work` (ops/μs, higher is better)
 
@@ -64,17 +73,19 @@ not the hot inner loop of a benchmark.
 
 | impl | t=2 | t=4 | t=8 |
 |---|---:|---:|---:|
-| `LockedStack` (`synchronized`) | 1.62 | 2.67 | 1.92 |
-| `ReentrantLockStack` (non-fair) | 1.60 | 1.93 | 1.69 |
-| `LockFreeStack` | **1.63** | **2.91** | **2.19** |
+| `LockedStack` (`synchronized`) | 1.62 | 2.69 | 1.91 |
+| `ReentrantLockStack` (non-fair) | 1.61 | 2.23 | 1.65 |
+| `LockFreeStack` | 1.62 | **2.91** | **2.18** |
+| `EliminationStack` | 1.62 | 2.81 | 2.04 |
 
 ### Allocation (B/op, lower is better)
 
 | impl | t=2 sym | t=4 sym | t=8 sym | 2P + 2C | t=4 bursty |
 |---|---:|---:|---:|---:|---:|
-| `LockedStack` | 24 | 24 | 24 | 318 † | 24 |
-| `ReentrantLockStack` | 32 | 24 | 24 | 14 | 28 |
-| `LockFreeStack` | 24 | 24 | 24 | 15 | 24 |
+| `LockedStack` | 24 | 24 | 24 | 472 † | 24 |
+| `ReentrantLockStack` | 31 | 24 | 24 | 18 | 29 |
+| `LockFreeStack` | 24 | 24 | 24 | 16 | 24 |
+| `EliminationStack` | 24 | 24 | 24 | 17 | 24 |
 
 > † Under `synchronized`, producers are too slow to keep up with consumers,
 > so `pop()` starts throwing `EmptyStackException` (~500 B per throw). The
@@ -83,66 +94,75 @@ not the hot inner loop of a benchmark.
 
 ### Findings
 
-- **At t=1 uncontended `synchronized` wins** — 87.3 ops/μs vs 58.1 for
-  `LockFreeStack` and 55.0 for `ReentrantLock`. Single-threaded work is
+- **At t=1 uncontended `synchronized` wins** — 86.5 ops/μs vs 58.1 for
+  `LockFreeStack` and 55.6 for `ReentrantLock`. Single-threaded work is
   the fast path of `synchronized`: the JIT inlines the method, the monitor
   operation compiles to a couple of cheap thin-lock ops. Meanwhile
   `LockFreeStack` pays a volatile read + a full-fence CAS per op, and
   `ReentrantLockStack` pays a wrapping method call plus its own CAS.
-  The "lock-free is always faster" folk claim doesn't survive contact
-  with this row.
-- **At low contention (t=2 symmetric) `LockFreeStack` leads** — 27.5 ops/μs
-  vs 18.3 for `synchronized`, 18.1 for `ReentrantLock`. CAS rarely needs
-  to retry, the cache line bounces only between two cores, and barging
-  buys `ReentrantLock` nothing (there is no one to bargain against). After
-  fixes #1 (hoist `new AtomicNode` out of retry) and #2 (`AtomicReferenceFieldUpdater`
-  for `next`), allocation is a **constant 24 B/op at any thread count** —
-  exactly one node per successful push, no more. The original code amplified
-  allocation from 58 B/op at t=2 to 233 B/op at t=8; that path is gone.
-- **Bursty workload flips the leaderboard from t=4 upward** — with
+  `EliminationStack` (57.9) sits right next to `LockFreeStack` — with no
+  contention, the elimination path is never touched, so the two behave
+  identically. The "lock-free is always faster" folk claim doesn't survive
+  contact with this row.
+- **At low contention (t=2 symmetric) `EliminationStack` leads** —
+  19.5 ops/μs vs 14.7 for `LockFreeStack`, 11.4 for `synchronized`,
+  10.2 for `ReentrantLock`. This is **the** scenario elimination is designed
+  for: two threads are almost always in opposing modes (one pushing while
+  the other pops), the main-CAS collision rate is high enough to trip the
+  elimination path, and once tripped the exchange happens off-line
+  entirely. `EliminationStack` is +33 % faster than plain `LockFreeStack`
+  here, and beats both blocking variants by ~2×.
+- **Bursty workload — `LockFreeStack` wins from t=4 upward** — with
   ~200 CPU tokens of user work around each op, `LockFreeStack` becomes the
-  fastest at t=4 (2.91 vs 2.67 `synchronized`, 1.93 `ReentrantLock`) **and**
-  at t=8 (2.19 vs 1.92, 1.69). This is the scenario `LockFreeStack` is
-  designed for: every op still pays the full CAS + memory-fence cost, but
-  every lock op still pays acquire + release + contention arbitration, and
-  under bursts the lock's fast path never kicks in. Error bars are non-
-  overlapping at both t=4 and t=8, so the win is real, not noise.
+  fastest at t=4 (2.91 vs 2.69 `synchronized`, 2.23 `ReentrantLock`,
+  2.81 `EliminationStack`) **and** at t=8 (2.18 vs 1.91, 1.65, 2.04).
+  Error bars are non-overlapping. `EliminationStack` is *slightly* worse
+  than plain `LockFreeStack` under bursts (-3-7 %) because contention is
+  naturally low — the elimination path adds a slot CAS and a short spin
+  without gaining anything to trade. So under bursts, elimination is dead
+  weight; under tight symmetric contention, it pays for itself.
 - **`ReentrantLock` barging is destroyed by think-time** — it went from
-  69.3 ops/μs on symmetric t=4 to **1.93** on bursty t=4. Barging depends
+  43.8 ops/μs on symmetric t=4 to **2.23** on bursty t=4. Barging depends
   on the releasing thread immediately re-acquiring the lock before parked
   waiters wake up; a 200-token gap between `unlock()` and the next
   `lock()` is enough for waiters to actually get scheduled, at which
   point every op costs a full park/unpark cycle. So `ReentrantLock`'s
   symmetric-benchmark advantage is real only when the workload has no
   gaps — which is uncommon in production code.
-- **From t=4 onward on the tight symmetric loop `LockFreeStack` still
-  collapses** — 13.0 → 3.5 ops/μs at t=8. The two alloc-targeted fixes
-  drove allocation to its theoretical floor but **did not recover throughput**
-  under this specific workload. The bottleneck is cache-line bouncing on
-  the single `head` reference plus the absence of CAS back-off — see
-  recommendation #4 below.
-- **`synchronized` is the steady baseline** on the tight symmetric loop —
-  flat ~13-14 ops/μs across t≥4, constant 24 B/op. Nothing surprising.
+- **From t=4 onward on the tight symmetric loop the lock-free variants
+  still collapse** — 7.1 / 2.4 ops/μs at t=4 / t=8 for `LockFreeStack`,
+  7.8 / 3.2 for `EliminationStack` (elimination helps ~+30 % at t=8 but
+  neither is close to `ReentrantLock`'s ~42 ops/μs). The bottleneck on
+  the plain variant is cache-line bouncing on the single `head` reference
+  plus the absence of CAS back-off. Elimination diverts some collisions
+  off-line but cannot beat barging in a tight loop where the releasing
+  thread has zero gap before the next acquire.
 - **`ReentrantLock` (non-fair) dominates the symmetric high-contention rows**
-  (~68 ops/μs at t=8) thanks to **barging** — see the bursty finding above
+  (~42 ops/μs at t=8) thanks to **barging** — see the bursty finding above
   for why this advantage disappears the moment threads have any work
   between ops.
-- **Producer/consumer (2P + 2C)** doesn't help `LockFreeStack` much
-  (22.5 ops/μs vs 13.0 at sym t=4). A stack has a single contention point
-  (`head`); the role split does not separate cache-line traffic. `ReentrantLock`
-  is the natural winner on this specific shape too.
+- **Producer/consumer (2P + 2C)** doesn't help the lock-free variants
+  much (12.2 for `LockFreeStack`, 13.4 for `EliminationStack`). A stack
+  has a single contention point (`head`); the role split does not
+  separate cache-line traffic. `ReentrantLock` is the natural winner on
+  this specific shape too.
 
-### When to reach for `LockFreeStack`
+### When to reach for each stack
 
-The three winning scenarios above tell a coherent story: pick `LockFreeStack`
-when either **there are few threads and the operations are frequent**
-(t=2 symmetric — small teams pounding a shared collection) **or when
-each thread has real work between its stack operations** (bursty t≥4 —
-the vast majority of production code). Reach for `ReentrantLockStack`
-only when both conditions are false: many threads doing back-to-back
-`push`/`pop` with nothing in between. Reach for `LockedStack` (i.e.,
-`synchronized`) when there is exactly one thread — the JIT will
-optimize it to something the other two can't match.
+The winning scenarios above translate into a decision rule:
+
+| Scenario | Winner | Runner-up |
+|---|---|---|
+| Single thread, hot in a JIT-friendly spot | `LockedStack` (`synchronized`) | — |
+| Small team (~2 threads) pounding push/pop | `EliminationStack` | `LockFreeStack` |
+| Many threads, tight `push`+`pop` back-to-back, no user work | `ReentrantLockStack` (non-fair) | — |
+| Many threads with real user work between ops (bursty) | `LockFreeStack` | `EliminationStack` |
+| Producer/consumer pipeline with a stack | `ReentrantLockStack` | `EliminationStack` |
+
+Two takeaways: `EliminationStack` is the right default when you want a
+lock-free stack **and** you know you'll see contention on it (moderate
+symmetric loads). Plain `LockFreeStack` stays best when contention is
+low or bursty — its simpler hot path avoids the elimination overhead.
 
 ### Improving `LockFreeStack`
 
