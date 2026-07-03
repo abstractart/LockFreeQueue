@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit;
 @Fork(2)
 public class StackContentionBenchmark {
 
-    @Param({"LockedStack", "ReentrantLockStack", "LockFreeStack"})
+    @Param({"LockedStack", "ReentrantLockStack", "LockFreeStack", "EliminationStack"})
     public String impl;
 
     private StackOps stack;

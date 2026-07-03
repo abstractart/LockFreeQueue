@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 @Fork(2)
 public class StackScalingBenchmark {
 
-    @Param({"LockedStack", "ReentrantLockStack", "LockFreeStack"})
+    @Param({"LockedStack", "ReentrantLockStack", "LockFreeStack", "EliminationStack"})
     public String impl;
 
     private StackOps stack;
