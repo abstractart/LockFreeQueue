@@ -22,7 +22,7 @@ Only the three thread-safe implementations are exercised. The non-thread-safe
 | Lock-free | `LockFreeStack` | CAS on `head` via `AtomicReferenceFieldUpdater`, on node `next` via `AtomicReferenceFieldUpdater` |
 | Lock-free | `LockFreeQueue` | CAS on `head`/`tail` via `AtomicReference`, on node `next` via `AtomicReferenceFieldUpdater` |
 | Lock-free | `EliminationStack` | Treiber CAS + Hendler-Shavit elimination back-off array (8 stride-padded slots) |
-| Obstruction-free | `ExchangerEliminationStack` | Treiber CAS + elimination via `java.util.concurrent.Exchanger`'s internal arena (8 exchangers, 500 ns timeout). Formally obstruction-free, not lock-free — the exchange timeout is wallclock-based, so Lincheck model checking is not applicable (only stress test) |
+| Lock-free | `ExchangerEliminationStack` | Treiber CAS + elimination via `java.util.concurrent.Exchanger`'s internal arena (8 exchangers, 500 ns timeout). Lock-free at the system level (main CAS is non-blocking, `Exchanger`'s `parkNanos` is bounded by the wallclock timeout). Lincheck stress verifies it; Lincheck model checking does not apply because the wallclock timeout does not fire under logical time |
 
 ## Methodology
 
@@ -160,28 +160,38 @@ not the hot inner loop of a benchmark.
   single contention point (`head`), and only `Exchanger`'s arena
   effectively hides it from view.
 
-### Correctness caveat: `ExchangerEliminationStack` is obstruction-free
+### Correctness caveat: Lincheck model checking does not apply to `ExchangerEliminationStack`
 
-`java.util.concurrent.Exchanger.exchange(v, timeout, unit)` uses a
-**wallclock** timeout via `LockSupport.parkNanos`. If a partner never
-arrives and the timeout does not expire, the thread stays parked
-indefinitely — this is what makes the primitive obstruction-free rather
-than lock-free. Two practical consequences:
+`ExchangerEliminationStack` is lock-free at the system level. The main
+Treiber CAS path is unconditionally non-blocking; the elimination
+fallback uses `Exchanger.exchange(v, 500, NANOS)`, which internally may
+call `LockSupport.parkNanos` but with a bounded wallclock deadline.
+While one thread is parked in `Exchanger`, other threads freely make
+progress on the main CAS — that satisfies the definition of lock-freedom
+(Herlihy & Shavit, *The Art of Multiprocessor Programming*, §3.7:
+"infinitely often some method call finishes in a bounded number of steps").
+
+Two practical caveats, however:
 
 1. **Lincheck model checking cannot verify this class.** The model
-   checker uses logical time; a 500 ns wallclock deadline never fires in
-   its schedule, so any `pop()` on an empty stack observes an
-   indefinite hang. The class is verified by Lincheck **stress testing
-   only**, which uses real wallclock time and passes.
+   checker uses logical time; a 500 ns wallclock deadline never
+   "elapses" in its schedule, so any `pop()` on an empty stack appears
+   to wait for a partner indefinitely and is reported as a livelock.
+   This is a limitation of the verifier's timing abstraction, not of
+   the algorithm. The class is verified by Lincheck **stress testing**
+   (which uses real wallclock time) and passes.
 
-2. **In production, elimination-array progress guarantees hinge on
-   timeout being short and reliable.** With a long timeout (e.g. 100 μs),
-   heavily loaded systems could park threads for measurable time and
-   forfeit the lock-free property.
+2. **The lock-free guarantee is bounded by the timeout.** With the
+   configured 500 ns timeout, any parked thread returns within
+   sub-microsecond wallclock time. If the timeout were increased to,
+   say, 100 μs on a heavily loaded system, individual method calls
+   could observe measurable delays. System-level progress still holds,
+   but the "bounded steps" definition becomes a bounded wallclock
+   assumption in practice.
 
-For a benchmark comparison this is fine; for a production stack you
-would want either the hand-rolled `EliminationStack` (true lock-free)
-or `ReentrantLockStack` (well-understood blocking).
+For benchmark comparisons this is fine; for a production stack where
+you want a purely CAS-based progress guarantee with no reliance on
+wallclock timers, prefer the hand-rolled `EliminationStack`.
 
 ### When to reach for each stack
 

@@ -20,6 +20,14 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 //     тот, кто получит candidate, — успешный pop.
 //   - Non-blocking семантика эмулируется через `exchange(v, timeout, NANOS)`;
 //     на TimeoutException возвращаемся к главному CAS.
+//
+// Progress-класс: **lock-free** на уровне системы. Main CAS никогда не
+// блокируется, а parkNanos внутри Exchanger ограничен 500 нс timeout — пока
+// один поток запаркован в exchange, остальные свободно двигают main CAS,
+// что удовлетворяет определению lock-freedom (Herlihy & Shavit §3.7).
+// Формально это не «чистый CAS-only» алгоритм: гарантия ограниченного
+// времени опирается на wallclock timeout. Для окружений, где это
+// принципиально, есть строго CAS-based EliminationStack.
 final class ExchangerEliminationStack {
 
     volatile AtomicNode head;

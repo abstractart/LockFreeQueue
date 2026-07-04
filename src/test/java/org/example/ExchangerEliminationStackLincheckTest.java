@@ -11,11 +11,12 @@ import org.junit.jupiter.api.Test;
 //
 // **Только stress test.** Model checker Lincheck работает в логическом
 // времени — wallclock timeout внутри `Exchanger.exchange(v, 500ns)` там
-// никогда не наступает, и поток паркуется навсегда, ожидая партнёра. Это
-// не баг реализации, а фундаментальное свойство Exchanger'а: его
-// «non-blocking» семантика полностью зависит от wallclock timeout, что
-// делает его формально obstruction-free, а не lock-free. Stress test
-// использует настоящее время и корректно проходит все интерливинги.
+// никогда не наступает, и поток паркуется, ожидая партнёра, дольше чем
+// позволяет верификатор. Это **ограничение модели** Lincheck'а, а не
+// нарушение lock-freedom самого алгоритма: в реальном wallclock времени
+// timeout срабатывает за ≤500 нс, поток разбуживается и возвращается к
+// main CAS. Stress test использует настоящее время и корректно
+// проверяет все интерливинги.
 @Param(name = "value", gen = IntGen.class, conf = "1:5")
 public class ExchangerEliminationStackLincheckTest {
 
