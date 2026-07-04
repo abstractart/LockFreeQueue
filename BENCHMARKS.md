@@ -111,12 +111,37 @@ a wider pipeline, not the hot inner loop of a benchmark.
 ## Findings
 
 - **At t=1 uncontended `synchronized` wins** — 168.2 ops/µs vs ~120 for every
-  lock-free variant and 109.5 for `ReentrantLock`. Single-threaded work is the
-  fast path of `synchronized`: the JIT inlines the method and the monitor
-  compiles to a couple of cheap thin-lock ops, while the CAS variants each pay
-  a volatile read + a full-fence CAS per op. All four lock-free variants
-  converge to the same number here because none enters its elim/backoff path
-  without contention. "Lock-free is always faster" does not survive this row.
+  lock-free variant and 109.5 for `ReentrantLock`. All four lock-free variants
+  converge here because none enters its elim/backoff path without contention.
+  "Lock-free is always faster" does not survive this row. The *reason* the
+  monitor wins was chased down with two controlled experiments, and the two
+  obvious explanations both turned out to be wrong:
+
+  - **Not lock coarsening/elision.** Re-running this row with
+    `-XX:-EliminateLocks` (which disables both) changed `LockedStack` by
+    **0.0 %** (168.2 → 168.2); the lock-free and `ReentrantLock` rows, having
+    no monitors, are unaffected controls and also did not move.
+  - **Not "CAS is dearer than a monitor".** A primitive-cost microbenchmark
+    (single-thread, uncontended, two sync ops per invocation to mirror
+    `push`+`pop`) shows a seq-cst CAS and a monitor enter/exit costing *the
+    same*: `casVolatile` 226 vs `monitor` 224 ops/µs. On this Apple-M CPU
+    (LSE atomics) barrier strength is free too — plain / acquire / release /
+    seq-cst CAS all land at ~224. `ReentrantLock` is genuinely ~2× dearer
+    (114) because its AQS `state` CAS carries extra bookkeeping, which is why
+    it trails at t=1.
+
+  The gap is therefore **not in the synchronization primitive but in the
+  access pattern around it.** Per `push`+`pop`, `LockFreeStack` executes 3
+  volatile loads + 1 volatile store + 2 seq-cst CAS — because both `head` and
+  `AtomicNode.next` are `volatile`, *every* field touch is an ordered access
+  (`ldar`/`stlr`/`casal`). `LockedStack` instead amortizes all ordering into
+  the monitor's two enter/exit fences per region and runs the interior
+  (`head`, `Node.next` reads/writes) with plain loads/stores. Those ~4 extra
+  barrier-carrying accesses — not the CAS itself — are what put 168 (5.95 ns)
+  ahead of 120 (8.3 ns). Allocation is equal (24 B/op each), so it is not a
+  factor. This is the same theme as the contended rows in reverse: elimination
+  later wins by removing the contention point; here the monitor wins by not
+  paying per-access ordering on an uncontended fast path.
 
 - **`ExchangerEliminationStack` dominates every contended row.** At t=2 it hits
   **110.5 ops/µs** — 3× the next lock-free contender (`EliminationStack` 36.1)
