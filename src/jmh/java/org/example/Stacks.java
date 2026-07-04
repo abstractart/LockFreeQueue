@@ -9,6 +9,7 @@ final class Stacks {
             case "ReentrantLockStack" -> new ReentrantLockStackAdapter();
             case "LockFreeStack" -> new LockFreeStackAdapter();
             case "EliminationStack" -> new EliminationStackAdapter();
+            case "ExchangerEliminationStack" -> new ExchangerEliminationStackAdapter();
             default -> throw new IllegalArgumentException("Unknown stack impl: " + name);
         };
     }
@@ -33,6 +34,12 @@ final class Stacks {
 
     private static final class EliminationStackAdapter implements StackOps {
         private final EliminationStack s = new EliminationStack();
+        public void push(int v) { s.push(v); }
+        public int pop() { return s.pop(); }
+    }
+
+    private static final class ExchangerEliminationStackAdapter implements StackOps {
+        private final ExchangerEliminationStack s = new ExchangerEliminationStack();
         public void push(int v) { s.push(v); }
         public int pop() { return s.pop(); }
     }
