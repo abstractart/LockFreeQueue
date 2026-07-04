@@ -40,8 +40,8 @@ public class StackAsymmetricBenchmark {
         "ReentrantLockStack",
         "LockFreeStack",
         "EliminationStack",
-        "ExchangerEliminationStack",
         "BackoffLockFreeStack",
+        "ExchangerEliminationStack",
     })
     public String impl;
 
