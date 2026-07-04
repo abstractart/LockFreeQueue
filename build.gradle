@@ -49,6 +49,10 @@ jmh {
     // Sane defaults. Override per-run from the CLI:
     //   ./gradlew jmh -Pjmh.include=StackContentionBenchmark
     //   ./gradlew jmh -Pjmh.fork=1 -Pjmh.iterations=3 -Pjmh.warmupIterations=2
+    // -Xmx3g: StackAsymmetricBenchmark grows the stack during each iteration
+    // (3 producers per 1 consumer). 3 GB is enough for a 2-second iteration
+    // even at the fastest impl's throughput; iteration @Setup resets state.
+    jvmArgs = ['-Xmx3g']
     fork = (project.findProperty('jmh.fork') ?: '1') as Integer
     warmupIterations = (project.findProperty('jmh.warmupIterations') ?: '2') as Integer
     iterations = (project.findProperty('jmh.iterations') ?: '3') as Integer

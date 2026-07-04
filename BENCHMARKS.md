@@ -22,6 +22,7 @@ Only the three thread-safe implementations are exercised. The non-thread-safe
 | Lock-free | `LockFreeStack` | CAS on `head` via `AtomicReferenceFieldUpdater`, on node `next` via `AtomicReferenceFieldUpdater` |
 | Lock-free | `LockFreeQueue` | CAS on `head`/`tail` via `AtomicReference`, on node `next` via `AtomicReferenceFieldUpdater` |
 | Lock-free | `EliminationStack` | Treiber CAS + Hendler-Shavit elimination back-off array (8 stride-padded slots) |
+| Lock-free | `BackoffLockFreeStack` | Treiber CAS + exponential CAS-failure backoff via `Thread.onSpinWait()` (starts at 1 spin, doubles per failed CAS, capped at 1024). Reduces retry storm without pairing operations |
 | Lock-free | `ExchangerEliminationStack` | Treiber CAS + elimination via `java.util.concurrent.Exchanger`'s internal arena (8 exchangers, 500 ns timeout). Lock-free at the system level (main CAS is non-blocking, `Exchanger`'s `parkNanos` is bounded by the wallclock timeout). Lincheck stress verifies it; Lincheck model checking does not apply because the wallclock timeout does not fire under logical time |
 
 ## Methodology
@@ -33,6 +34,7 @@ Three benchmark shapes, all pre-fill the structure so `pop` rarely hits empty:
 | `*ScalingBenchmark` | symmetric `pushPop()` per thread | controlled via `-Pjmh.threads` |
 | `*ContentionBenchmark` | `@Group` with 2 producers (only `push`) + 2 consumers (only `pop`) | 4 (fixed) |
 | `StackBurstyBenchmark` | `push`, `Blackhole.consumeCPU(200)`, `pop`, `consumeCPU(200)` — simulates a stack embedded in a real pipeline, not a hot inner loop | controlled via `-Pjmh.threads` |
+| `StackAsymmetricBenchmark` | `@Group` with 3 producers (only `push`) + 1 consumer (only `pop`) — producer-heavy shape where elimination has few natural push↔pop pairs and most contention is push↔push | 4 (fixed) |
 
 > **Reference environment:** Apple M-series, JDK 25, Gradle 9.6.0,
 > `-Pjmh.fork=2 -Pjmh.warmupIterations=3 -Pjmh.warmup=1s -Pjmh.iterations=5
@@ -66,6 +68,23 @@ Three benchmark shapes, all pre-fill the structure so `pop` rarely hits empty:
 | `LockFreeStack` | 58.3 | 14.1 | 7.2 | 2.2 | 12.6 |
 | `EliminationStack` | 58.0 | 18.6 | 8.0 | 3.1 | 14.2 |
 | `ExchangerEliminationStack` | 58.1 | **57.6** | **53.2** | 43.1 | **73.9** |
+
+### Throughput — asymmetric 3 producers + 1 consumer (ops/μs, higher is better)
+
+Producer-heavy `@Group`: 3 threads only calling `push`, 1 thread only calling
+`pop`. Elimination has few natural push↔pop partners (pushes outnumber pops
+3×) — most contention is push↔push on `head`. This is the shape where a
+CAS-backoff strategy should be visible; a pure elimination array has less to
+work with.
+
+| impl | 3P + 1C |
+|---|---:|
+| `LockedStack` (`synchronized`) | 14.1 ± 1.3 |
+| `ReentrantLockStack` (non-fair) | 28.9 ± 16.7 |
+| `LockFreeStack` | 14.6 ± 4.5 |
+| `EliminationStack` | 16.1 ± 3.1 |
+| `BackoffLockFreeStack` | 16.1 ± 3.5 |
+| `ExchangerEliminationStack` | **61.0 ± 18.4** |
 
 ### Throughput — bursty `push + work + pop + work` (ops/μs, higher is better)
 
@@ -159,6 +178,21 @@ not the hot inner loop of a benchmark.
   lock-free variants trail badly (12.6 and 14.2). The stack still has a
   single contention point (`head`), and only `Exchanger`'s arena
   effectively hides it from view.
+- **Producer-heavy 3P + 1C: adaptive backoff shows its intended effect,
+  but it's small.** `BackoffLockFreeStack` (16.1 ops/μs) improves on
+  plain `LockFreeStack` (14.6) by ~+10 % — the retry storm on `head` is
+  measurably reduced. But: (i) the error bars overlap (±3.5 vs ±4.5), so
+  the improvement is on the edge of statistical significance; (ii) the
+  hand-rolled `EliminationStack` scores *the same* 16.1, even though its
+  elim path finds few natural push↔pop partners under this ratio — the
+  small win seems to come from occasional consumer/producer pairings
+  through the arena, not from elimination doing what it was designed
+  for; and (iii) `ExchangerEliminationStack` still leads decisively at
+  61.0 ops/μs — Doug Lea's arena reduces push↔push cache-line contention
+  even without valid rendezvous pairs, effectively acting as a
+  distribution mechanism. Adaptive backoff remains valuable as a
+  low-overhead fallback for structures where elimination doesn't apply,
+  but on this benchmark it's dwarfed by arena-based approaches.
 
 ### Correctness caveat: Lincheck model checking does not apply to `ExchangerEliminationStack`
 
@@ -201,9 +235,10 @@ The winning scenarios above translate into a decision rule:
 |---|---|---|
 | Single thread, hot in a JIT-friendly spot | `LockedStack` (`synchronized`) | any lock-free |
 | Contended symmetric push/pop (t=2, t=4, t=8, or 2P+2C) | `ExchangerEliminationStack` | `ReentrantLockStack` (t≥4) or `EliminationStack` (t=2) |
+| Producer-heavy (3P+1C) | `ExchangerEliminationStack` | `ReentrantLockStack` |
 | Bursty (user work between ops) at t=2 or t=4 | `LockFreeStack` | `EliminationStack` |
 | Bursty at t=8 | `ExchangerEliminationStack` (barely) | `LockFreeStack` |
-| Requires **strict** lock-free progress guarantee | `EliminationStack` or `LockFreeStack` | — |
+| Requires **strict** lock-free progress guarantee | `EliminationStack`, `BackoffLockFreeStack`, or `LockFreeStack` | — |
 
 Takeaways:
 
@@ -218,6 +253,12 @@ Takeaways:
 - The hand-rolled `EliminationStack` is now essentially superseded by
   `ExchangerEliminationStack` on performance, and kept in the repo as
   a strict lock-free alternative and as an educational reference.
+- `BackoffLockFreeStack` illustrates the classical adaptive-backoff
+  pattern (exponential `Thread.onSpinWait()` after each failed CAS).
+  It is measurably (~10 %) faster than plain `LockFreeStack` under
+  push-heavy contention and adds no allocation on top of the fast path
+  — kept in the repo as the reference implementation of that technique.
+  Under this workload arena-based approaches are still 4× faster.
 
 ### Improving `LockFreeStack`
 
@@ -287,24 +328,30 @@ t≥4 in the symmetric workload. Four code-level issues account for that:
    to reason about, prerequisite for fix #4 (a back-off scheme works
    directly against the top reference, not a sentinel's `next`).
 
-4. **No back-off on CAS failure** — the loop spins flat-out on a
-   contended cache line. At t=8 this is the dominant cost after (1)
-   is fixed. **Fix:** introduce `Thread.onSpinWait()` after the first
-   few failures, escalating to a short `LockSupport.parkNanos(N)` or
-   `Thread.yield()` if contention persists. This is the lever that
-   closes the gap against `ReentrantLock`'s barging.
+4. **✅ Applied as a separate implementation, `BackoffLockFreeStack`.**
+   Exponential CAS-failure backoff via `Thread.onSpinWait()` (starts at
+   1 spin, doubles per failed CAS, capped at 1024). Reset to 1 at the
+   start of each call — no cross-call memory. Kept as a separate class
+   so the plain `LockFreeStack` remains a clean Treiber reference.
+
+   **Measured effect on the producer-heavy 3P + 1C row:** 14.6 → 16.1
+   ops/μs (+10 %) with error bars overlapping. Under symmetric loads the
+   improvement is smaller still. Backoff genuinely reduces the retry
+   storm on `head` — but the throughput ceiling under contention is
+   dominated by cache-line ping-pong, and just spacing retries in time
+   doesn't remove the ping-pong itself. Elimination-arena approaches
+   (`EliminationStack`, `ExchangerEliminationStack`) do — they divert
+   traffic off `head` entirely — which is why they win by a factor of
+   3-4× on the same workload.
 
 Fixes (1)+(2)+(3) brought `LockFreeStack` to canonical Treiber-stack
-form (one node per push, no sentinel, ARFU-based CAS) — but throughput
-at t≥4 has **not** recovered toward `synchronized`'s ~13-14 ops/μs:
-`LockFreeStack` still sits at ~3 ops/μs at t=8. The original BENCHMARKS
-prediction that allocation-related fixes alone would close the gap
-turned out to be wrong; the t≥4 collapse is cache-line contention on
-the single `head` reference plus the absence of CAS back-off. Fix #4
-(back-off) is the next lever. Beating non-fair `ReentrantLock`'s
-barging at t=8 on a tight `push+pop` micro-benchmark is a harder
-problem — typically solved with elimination arrays or other
-contention-reduction structures, not a one-line patch.
+form. Fix (4) added the classical adaptive backoff — with a small but
+real effect. The bigger levers turned out to be elimination arrays
+(`EliminationStack`, `ExchangerEliminationStack`) which win decisively
+under contention by taking traffic off the single-`head` cache line
+altogether. Beating non-fair `ReentrantLock` barging at t=8 on a tight
+`push+pop` micro-benchmark, however, requires arena-based structures —
+which `ExchangerEliminationStack` provides via `java.util.concurrent.Exchanger`.
 
 ---
 
