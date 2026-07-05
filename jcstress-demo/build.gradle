@@ -1,0 +1,12 @@
+plugins { id 'java' }
+java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+repositories { mavenCentral() }
+dependencies {
+    implementation 'org.openjdk.jcstress:jcstress-core:0.16'
+    annotationProcessor 'org.openjdk.jcstress:jcstress-core:0.16'
+}
+tasks.register('jcstress', JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'org.openjdk.jcstress.Main'
+    if (project.hasProperty('jcargs')) args(project.property('jcargs').toString().split(' '))
+}
