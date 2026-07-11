@@ -18,8 +18,12 @@ import org.openjdk.jmh.annotations.Warmup;
 import java.util.EmptyStackException;
 import java.util.concurrent.TimeUnit;
 
+// Producer-consumer FIFO: 2 продюсера + 2 потребителя.
+// Меряем два режима сразу: Throughput (средняя пропускная способность) и
+// SampleTime (распределение задержки операции, включая хвост p0.99/p0.999/max).
+// producer и consumer сэмплируются отдельно.
 @State(Scope.Benchmark)
-@BenchmarkMode(Mode.Throughput)
+@BenchmarkMode({Mode.Throughput, Mode.SampleTime})
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @Warmup(iterations = 3, time = 2)
 @Measurement(iterations = 5, time = 2)

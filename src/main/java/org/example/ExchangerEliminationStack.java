@@ -35,7 +35,16 @@ final class ExchangerEliminationStack {
     private static final AtomicReferenceFieldUpdater<ExchangerEliminationStack, AtomicNode> HEAD =
             AtomicReferenceFieldUpdater.newUpdater(ExchangerEliminationStack.class, AtomicNode.class, "head");
 
-    private static final int ELIM_SLOTS = 8;
+    // 2, not 8: a sweep (ExchangerTuningBenchmark) showed that over-slotting
+    // fragments push↔pop partners across too many exchangers, so most exchanges
+    // never match and churn to timeout — occasionally parking, which is what
+    // produced a heavy latency tail (p99 ~29 µs, max ~180 ms at 8 slots). Two
+    // slots concentrate traffic enough to keep the match rate high (p99 drops to
+    // ~3.5 µs, max ~2 ms) while still letting two pairs rendezvous in parallel,
+    // costing only ~18 % average throughput vs 8 slots. slots=1 serializes all
+    // elimination through one exchanger and halves throughput. The exchange
+    // timeout, by contrast, was shown not to matter (100/500/2000 ns identical).
+    private static final int ELIM_SLOTS = 2;
     // Небольшой timeout — сопоставим со «спином» в EliminationStack (~32 onSpinWait).
     // Слишком короткий — не даст Exchanger'у даже войти во внутренний spin;
     // слишком длинный — тратим время на неуспешные попытки, пока main-CAS свободен.
