@@ -46,18 +46,23 @@ test {
 }
 
 jmh {
-    // Sane defaults. Override per-run from the CLI:
+    // Defaults MIRROR the @Fork/@Warmup/@Measurement annotations on the
+    // benchmark classes (fork=2, warmup 3x2s, measurement 5x2s) — this block
+    // overrides those annotations, so keeping them in sync means the numbers
+    // in the source read true. Two forks matter for SampleTime tail stats
+    // (p0.99/p0.999): a single fork can't separate real tail from JIT/GC noise.
+    // Override per-run from the CLI for a quick smoke run:
     //   ./gradlew jmh -Pjmh.include=StackContentionBenchmark
-    //   ./gradlew jmh -Pjmh.fork=1 -Pjmh.iterations=3 -Pjmh.warmupIterations=2
+    //   ./gradlew jmh -Pjmh.fork=1 -Pjmh.iterations=3 -Pjmh.warmupIterations=2 -Pjmh.time=1s -Pjmh.warmup=500ms
     // -Xmx3g: StackAsymmetricBenchmark grows the stack during each iteration
     // (3 producers per 1 consumer). 3 GB is enough for a 2-second iteration
     // even at the fastest impl's throughput; iteration @Setup resets state.
     jvmArgs = ['-Xmx3g']
-    fork = (project.findProperty('jmh.fork') ?: '1') as Integer
-    warmupIterations = (project.findProperty('jmh.warmupIterations') ?: '2') as Integer
-    iterations = (project.findProperty('jmh.iterations') ?: '3') as Integer
-    timeOnIteration = project.findProperty('jmh.time') ?: '1s'
-    warmup = project.findProperty('jmh.warmup') ?: '500ms'
+    fork = (project.findProperty('jmh.fork') ?: '2') as Integer
+    warmupIterations = (project.findProperty('jmh.warmupIterations') ?: '3') as Integer
+    iterations = (project.findProperty('jmh.iterations') ?: '5') as Integer
+    timeOnIteration = project.findProperty('jmh.time') ?: '2s'
+    warmup = project.findProperty('jmh.warmup') ?: '2s'
     if (project.hasProperty('jmh.threads')) {
         threads = (project.property('jmh.threads')) as Integer
     }

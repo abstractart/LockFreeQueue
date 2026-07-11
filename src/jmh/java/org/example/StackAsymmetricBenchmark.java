@@ -27,8 +27,13 @@ import java.util.concurrent.TimeUnit;
 //
 // Специально показывает, где adaptive backoff даёт эффект, которого не
 // даёт elimination — push↔push contention.
+//
+// Меряем два режима сразу: Throughput и SampleTime. В push-heavy конфигурации
+// хвост задержки (p0.99/p0.999) особенно показателен — 3 продюсера дерутся за
+// `head`, и разница между backoff и «голым» CAS-retry видна именно в хвосте,
+// а не в среднем. producer и consumer сэмплируются отдельно.
 @State(Scope.Benchmark)
-@BenchmarkMode(Mode.Throughput)
+@BenchmarkMode({Mode.Throughput, Mode.SampleTime})
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @Warmup(iterations = 3, time = 2)
 @Measurement(iterations = 5, time = 2)

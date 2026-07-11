@@ -22,8 +22,16 @@ import java.util.concurrent.TimeUnit;
 // Стек префилится — pop почти всегда находит элемент. EmptyStackException
 // ловится, чтобы редкие гонки на полупустом стеке не ломали бенчмарк.
 // Stack (не thread-safe) исключён из @Param — он бы крашился неповторимо.
+//
+// Меряем два режима сразу:
+//   Throughput — средняя пропускная способность (ops/us);
+//   SampleTime — распределение задержки одной операции, включая хвост
+//                (p0.99 / p0.999 / max). Именно хвост — главный аргумент за
+//                lock-free: под нагрузкой lock может выигрывать по среднему,
+//                но проваливаться по p999 из-за park/unpark и priority
+//                inversion. producer и consumer сэмплируются отдельно.
 @State(Scope.Benchmark)
-@BenchmarkMode(Mode.Throughput)
+@BenchmarkMode({Mode.Throughput, Mode.SampleTime})
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @Warmup(iterations = 3, time = 2)
 @Measurement(iterations = 5, time = 2)
