@@ -20,6 +20,36 @@ Only the thread-safe implementations are exercised. The non-thread-safe
 | Lock-free | `BackoffLockFreeStack` | Treiber CAS + exponential CAS-failure backoff via `Thread.onSpinWait()` (starts at 1 spin, doubles per failed CAS, capped at 1024) |
 | Lock-free | `ExchangerEliminationStack` | Treiber CAS + elimination via `java.util.concurrent.Exchanger`'s internal arena (2 exchangers, 500 ns timeout) |
 
+### Progress guarantees
+
+The non-blocking hierarchy (Herlihy & Shavit, *The Art of Multiprocessor
+Programming*), strongest to weakest, each implying the next:
+
+- **Wait-free** — *every* thread completes each operation in a bounded number of
+  its own steps, regardless of scheduling. No starvation. (None here — a wait-free
+  stack needs an announcement array + helping and is much costlier.)
+- **Lock-free** — *infinitely often some* thread completes in a bounded number of
+  steps: the system as a whole always makes progress, though an individual thread
+  may be overtaken indefinitely. No system-wide livelock.
+- **Obstruction-free** — a thread completes in bounded steps only if it eventually
+  runs *in isolation*; under sustained contention threads may livelock without a
+  contention manager. (None here — all lock-free variants are strictly stronger.)
+
+| Class | Progress guarantee | Notes |
+|---|---|---|
+| `LockedStack` | **Blocking** | A thread descheduled inside the monitor blocks all others |
+| `ReentrantLockStack` | **Blocking** | Same — AQS park/unpark; barging helps throughput, not the guarantee |
+| `LockFreeStack` | **Lock-free** (pure, CAS-only) | Canonical Treiber; not wait-free — a slow thread can be overtaken forever |
+| `BackoffLockFreeStack` | **Lock-free** (pure, CAS-only) | Backoff is tuning over the same CAS loop; class unchanged |
+| `EliminationStack` | **Lock-free** (pure, CAS-only) | Main path + bounded on-core spin fallback; no `park`, no timers |
+| `ExchangerEliminationStack` | **Lock-free\*** | System-level lock-free, but "bounded steps" leans on `Exchanger`'s bounded-wallclock `parkNanos`, not pure CAS steps — see *Correctness caveat* |
+
+> Progress class and tail-latency predictability are **orthogonal**: `ReentrantLock`
+> (blocking) and the 8-slot `Exchanger` (lock-free\*) both `park` and both showed a
+> multi-ms tail, despite sitting in different progress classes. A `park` preserves
+> *system* progress (it holds no lock) but hands *per-operation* latency to the OS
+> scheduler. See *Latency distribution*.
+
 ## Methodology
 
 Four benchmark shapes, all pre-fill the stack so `pop` rarely hits empty:
@@ -177,6 +207,23 @@ order of magnitude, not a value.
 - **`synchronized` has the worst realistic tail** (p99.9 = 1581 µs at 2P+2C): the
   monitor both blocks *and* lacks barging, so contended waiters eat a full
   park/unpark far more often than `ReentrantLock` does.
+
+> **The tail is decided by "does the contended path park", not by "is it
+> lock-free".** The blanket claim *lock-free ⇒ more predictable tail* does **not**
+> survive this data: plain `LockFreeStack` and `BackoffLockFreeStack` have a
+> **worse** p99.9 than the blocking `ReentrantLockStack` on the 3P+1C shape
+> (135 / 126 µs vs 46 µs), because a CAS-retry storm on `head` is itself a source
+> of tail, and every lock-free variant here also carries a multi-ms `max` from
+> retry bursts plus per-`push` allocation GC. What the numbers *do* show is a
+> clean split on one axis: the worst tail belongs to a stack that **parks and
+> can't barge** (`synchronized`, p99.9 1581 µs), and the best belongs to one that
+> **stays on-core and never parks** (`EliminationStack`, p99.9 5.8 / 10.8 µs).
+> Everything that can `park` — `synchronized`, `ReentrantLock`, the 8-slot
+> `Exchanger` — hands its worst case to the OS scheduler and pays a multi-ms
+> `max`. So being lock-free is *necessary but not sufficient* for a stable tail:
+> you also need a non-parking (spin) fallback, and ideally elimination to divert
+> contention off the hot point entirely. `EliminationStack` wins the tail by
+> having both, not merely by being lock-free.
 
 ### Retuning `ExchangerEliminationStack` — the tail was a tuning bug, not the primitive
 
