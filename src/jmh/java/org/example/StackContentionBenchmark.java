@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit;
 @Fork(2)
 public class StackContentionBenchmark {
 
-    @Param({"LockedStack", "ReentrantLockStack", "LockFreeStack", "EliminationStack", "BackoffLockFreeStack", "ExchangerEliminationStack"})
+    @Param({"LockedStack", "ReentrantLockStack", "LockFreeStack", "EliminationStack", "BackoffLockFreeStack", "ExchangerEliminationStack", "FlatCombiningStack"})
     public String impl;
 
     private StackOps stack;
