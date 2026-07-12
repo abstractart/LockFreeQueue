@@ -93,6 +93,28 @@ final class ExchangerEliminationStack {
         }
     }
 
+    // Non-throwing pop: returns Integer.MIN_VALUE when empty instead of allocating
+    // an EmptyStackException (see LockedStack.poll). Mirrors pop() exactly except
+    // for the empty branch.
+    int poll() {
+        while (true) {
+            AtomicNode currentTop = head;
+            if (currentTop != null) {
+                AtomicNode newTop = currentTop.next;
+                if (HEAD.compareAndSet(this, currentTop, newTop)) {
+                    return currentTop.val;
+                }
+            }
+            AtomicNode paired = tryEliminatePop();
+            if (paired != null) {
+                return paired.val;
+            }
+            if (currentTop == null) {
+                return Integer.MIN_VALUE;
+            }
+        }
+    }
+
     boolean isEmpty() {
         return head == null;
     }

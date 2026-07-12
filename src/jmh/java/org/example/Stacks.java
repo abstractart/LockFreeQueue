@@ -20,41 +20,48 @@ final class Stacks {
         private final LockedStack s = new LockedStack();
         public void push(int v) { s.push(v); }
         public int pop() { return s.pop(); }
+        public int poll() { return s.poll(); }
     }
 
     private static final class ReentrantLockStackAdapter implements StackOps {
         private final ReentrantLockStack s = new ReentrantLockStack();
         public void push(int v) { s.push(v); }
         public int pop() { return s.pop(); }
+        public int poll() { return s.poll(); }
     }
 
     private static final class LockFreeStackAdapter implements StackOps {
         private final LockFreeStack s = new LockFreeStack();
         public void push(int v) { s.push(v); }
         public int pop() { return s.pop(); }
+        public int poll() { return s.poll(); }
     }
 
     private static final class EliminationStackAdapter implements StackOps {
         private final EliminationStack s = new EliminationStack();
         public void push(int v) { s.push(v); }
         public int pop() { return s.pop(); }
+        public int poll() { return s.poll(); }
     }
 
     private static final class ExchangerEliminationStackAdapter implements StackOps {
         private final ExchangerEliminationStack s = new ExchangerEliminationStack();
         public void push(int v) { s.push(v); }
         public int pop() { return s.pop(); }
+        public int poll() { return s.poll(); }
     }
 
     private static final class BackoffLockFreeStackAdapter implements StackOps {
         private final BackoffLockFreeStack s = new BackoffLockFreeStack();
         public void push(int v) { s.push(v); }
         public int pop() { return s.pop(); }
+        public int poll() { return s.poll(); }
     }
 
     private static final class FlatCombiningStackAdapter implements StackOps {
         private final FlatCombiningStack s = new FlatCombiningStack();
         public void push(int v) { s.push(v); }
         public int pop() { return s.pop(); }
+        public int poll() { return s.poll(); }
     }
 }

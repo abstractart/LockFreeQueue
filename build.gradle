@@ -54,10 +54,20 @@ jmh {
     // Override per-run from the CLI for a quick smoke run:
     //   ./gradlew jmh -Pjmh.include=StackContentionBenchmark
     //   ./gradlew jmh -Pjmh.fork=1 -Pjmh.iterations=3 -Pjmh.warmupIterations=2 -Pjmh.time=1s -Pjmh.warmup=500ms
-    // -Xmx3g: StackAsymmetricBenchmark grows the stack during each iteration
-    // (3 producers per 1 consumer). 3 GB is enough for a 2-second iteration
-    // even at the fastest impl's throughput; iteration @Setup resets state.
-    jvmArgs = ['-Xmx3g']
+    // JVM flags tuned to take GC off the critical path so it stops polluting the
+    // latency tail (a stop-the-world pause once produced a 1.77 s SampleTime max):
+    //   -Xms3g -Xmx3g       fixed heap — no resize pauses mid-run.
+    //   -XX:+AlwaysPreTouch commit + fault in all pages up front — no first-touch
+    //                       page-fault jitter on the early measured iterations.
+    //   -XX:+UseZGC -XX:+ZGenerational   generational ZGC: concurrent, sub-ms
+    //                       pauses, so per-push node allocation no longer stalls
+    //                       a spinning thread with a multi-ms STW. (ZGenerational
+    //                       is explicit on the JDK 21 toolchain; it is the default
+    //                       from JDK 23.) Absolute throughput shifts vs the old G1
+    //                       runs — numbers are not 1:1 comparable to pre-ZGC reports.
+    // 3 GB still covers StackAsymmetricBenchmark growing the stack over a 2 s
+    // iteration; iteration @Setup resets state.
+    jvmArgs = ['-Xms3g', '-Xmx3g', '-XX:+AlwaysPreTouch', '-XX:+UseZGC', '-XX:+ZGenerational']
     fork = (project.findProperty('jmh.fork') ?: '2') as Integer
     warmupIterations = (project.findProperty('jmh.warmupIterations') ?: '3') as Integer
     iterations = (project.findProperty('jmh.iterations') ?: '5') as Integer
