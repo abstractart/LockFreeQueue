@@ -13,7 +13,6 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 
-import java.util.EmptyStackException;
 import java.util.concurrent.TimeUnit;
 
 // Симметричный workload (каждый поток делает push+pop) — позволяет варьировать
@@ -43,10 +42,6 @@ public class StackScalingBenchmark {
     @Benchmark
     public int pushPop() {
         stack.push(42);
-        try {
-            return stack.pop();
-        } catch (EmptyStackException e) {
-            return -1;
-        }
+        return stack.poll();
     }
 }

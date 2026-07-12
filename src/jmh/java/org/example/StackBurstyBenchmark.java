@@ -14,7 +14,6 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
-import java.util.EmptyStackException;
 import java.util.concurrent.TimeUnit;
 
 // Bursty workload: каждая операция окружена «пользовательской» работой,
@@ -55,12 +54,7 @@ public class StackBurstyBenchmark {
     public int burstyPushPop() {
         stack.push(42);
         Blackhole.consumeCPU(WORK_TOKENS);
-        int v;
-        try {
-            v = stack.pop();
-        } catch (EmptyStackException e) {
-            v = -1;
-        }
+        int v = stack.poll();
         Blackhole.consumeCPU(WORK_TOKENS);
         return v;
     }

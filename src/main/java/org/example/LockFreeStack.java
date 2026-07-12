@@ -33,6 +33,21 @@ public class LockFreeStack {
         }
     }
 
+    // Non-throwing pop: returns Integer.MIN_VALUE when empty instead of allocating
+    // an EmptyStackException (see LockedStack.poll).
+    int poll() {
+        while (true) {
+            AtomicNode currentTop = head;
+            if (currentTop == null) {
+                return Integer.MIN_VALUE;
+            }
+            AtomicNode newTop = currentTop.next;
+            if (HEAD.compareAndSet(this, currentTop, newTop)) {
+                return currentTop.val;
+            }
+        }
+    }
+
     boolean isEmpty() {
         return head == null;
     }

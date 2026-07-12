@@ -15,7 +15,6 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 
-import java.util.EmptyStackException;
 import java.util.concurrent.TimeUnit;
 
 // Producer-consumer workload: 2 продюсера + 2 потребителя.
@@ -62,10 +61,6 @@ public class StackContentionBenchmark {
     @Group("pushPop")
     @GroupThreads(2)
     public int consumer() {
-        try {
-            return stack.pop();
-        } catch (EmptyStackException e) {
-            return -1;
-        }
+        return stack.poll();
     }
 }

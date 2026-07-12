@@ -55,6 +55,24 @@ public class BackoffLockFreeStack {
         }
     }
 
+    // Non-throwing pop: returns Integer.MIN_VALUE when empty instead of allocating
+    // an EmptyStackException (see LockedStack.poll).
+    int poll() {
+        int spins = 1;
+        while (true) {
+            AtomicNode currentTop = head;
+            if (currentTop == null) {
+                return Integer.MIN_VALUE;
+            }
+            AtomicNode newTop = currentTop.next;
+            if (HEAD.compareAndSet(this, currentTop, newTop)) {
+                return currentTop.val;
+            }
+            backoff(spins);
+            spins = Math.min(spins << 1, MAX_SPINS);
+        }
+    }
+
     boolean isEmpty() {
         return head == null;
     }

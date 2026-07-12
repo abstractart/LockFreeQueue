@@ -36,6 +36,22 @@ public class ReentrantLockStack {
         }
     }
 
+    // Non-throwing pop: returns Integer.MIN_VALUE when empty instead of allocating
+    // an EmptyStackException (see LockedStack.poll).
+    public int poll() {
+        lock.lock();
+        try {
+            if (head == null) {
+                return Integer.MIN_VALUE;
+            }
+            Node curr = head;
+            head = curr.next;
+            return curr.val;
+        } finally {
+            lock.unlock();
+        }
+    }
+
     public boolean isEmpty() {
         lock.lock();
         try {

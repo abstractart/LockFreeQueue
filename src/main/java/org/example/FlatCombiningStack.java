@@ -82,6 +82,16 @@ final class FlatCombiningStack {
         return r.result;
     }
 
+    // Non-throwing pop: returns Integer.MIN_VALUE when empty instead of allocating
+    // an EmptyStackException (see LockedStack.poll).
+    int poll() {
+        PubRecord r = doOp(POP, 0);
+        if (r.empty) {
+            return Integer.MIN_VALUE;
+        }
+        return r.result;
+    }
+
     boolean isEmpty() {
         return head == null;
     }

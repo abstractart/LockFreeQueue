@@ -15,7 +15,6 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 
-import java.util.EmptyStackException;
 import java.util.concurrent.TimeUnit;
 
 // Асимметричный producer-heavy workload: 3 продюсера + 1 потребитель.
@@ -72,10 +71,6 @@ public class StackAsymmetricBenchmark {
     @Group("pushHeavy")
     @GroupThreads(1)
     public int consumer() {
-        try {
-            return stack.pop();
-        } catch (EmptyStackException e) {
-            return -1;
-        }
+        return stack.poll();
     }
 }
