@@ -1,69 +1,69 @@
-# Benchmarks report — Linux run
+# Отчёт по бенчмаркам — прогон на Linux
 
-JMH-based performance comparison of the thread-safe `Stack` implementations
-in this repo, run on a Linux box. This is a companion to [`BENCHMARKS.md`](BENCHMARKS.md)
-(which holds the original Apple M-series numbers) — kept as a **separate
-file so neither machine's history overwrites the other's**. Only the
-Stack family was re-run here; Queue is not covered by this file.
+Сравнение производительности потокобезопасных реализаций `Stack` из этого
+репозитория на базе JMH, прогнанное на Linux-боксе. Это компаньон к
+[`BENCHMARKS.md`](BENCHMARKS.md) (где лежат исходные числа Apple M-series) —
+держится **отдельным файлом, чтобы история одной машины не перезаписывала
+другую**. Здесь перепрогнано только семейство Stack; Queue этот файл не
+покрывает.
 
-This refresh re-runs the same JMH suite the Mac report was regenerated with:
-`BackoffLockFreeStack` is now included in every shape (previously
-asymmetric-only), `ExchangerEliminationStack` runs at its retuned
-`ELIM_SLOTS = 2` (was 8), and the two `@Group` shapes
-(`StackContentionBenchmark`, `StackAsymmetricBenchmark`) now measure
-`Mode.SampleTime` latency alongside throughput in the same pass. See
-`BENCHMARKS.md` §*Retuning* for why the slot count changed and §*Latency
-distribution* for how to read the percentile tables.
+Этот refresh перепрогоняет тот же JMH-набор, которым регенерировался Mac-отчёт:
+`BackoffLockFreeStack` теперь включён во все формы (раньше только
+асимметричная), `ExchangerEliminationStack` работает на перетюненном
+`ELIM_SLOTS = 2` (было 8), а две `@Group`-формы (`StackContentionBenchmark`,
+`StackAsymmetricBenchmark`) теперь меряют латентность `Mode.SampleTime` рядом с
+throughput за один проход. См. `BENCHMARKS.md` §*Перетюнинг* — почему изменилось
+число слотов, и §*Распределение латентности* — как читать таблицы перцентилей.
 
-Source for the benchmarks: `src/jmh/java/org/example/`.
+Исходники бенчмарков: `src/jmh/java/org/example/`.
 
-## Environment
+## Окружение
 
 | | |
 |---|---|
-| Date | 2026-07-11 |
-| CPU | Intel(R) Core(TM) i5-7300HQ @ 2.50GHz, 4 cores, **1 thread/core (no SMT)**, max 3.5 GHz |
-| OS | Linux 7.0.0-27-generic (x86_64) |
+| Дата | 2026-07-11 |
+| CPU | Intel(R) Core(TM) i5-7300HQ @ 2.50GHz, 4 ядра, **1 поток/ядро (нет SMT)**, макс 3.5 GHz |
+| ОС | Linux 7.0.0-27-generic (x86_64) |
 | JDK | OpenJDK 21.0.11 |
 | Gradle | 9.6.0 (`me.champeau.jmh` 0.7.3) |
-| JMH params | bare `./gradlew jmh` defaults, which now mirror the `@Fork`/`@Warmup`/`@Measurement` annotations: `fork=2 × warmup 3×2s × iter 5×2s` (no CLI overrides) |
+| Параметры JMH | голые дефолты `./gradlew jmh`, которые теперь зеркалят аннотации `@Fork`/`@Warmup`/`@Measurement`: `fork=2 × warmup 3×2s × iter 5×2s` (без CLI-оверрайдов) |
 
-> **Only 4 physical cores, no hyperthreading.** The Apple M-series
-> reference machine in `BENCHMARKS.md` has more (and heterogeneous P/E)
-> cores. Any row at `t≥4` here runs at or past full core saturation, and
-> `t=8` genuinely oversubscribes 2 logical threads per core — treat `t=8`
-> as an oversubscription stress case, not a scaling data point comparable
-> 1:1 with the Mac's `t=8`.
+> **Всего 4 физических ядра, без hyperthreading.** Референсная машина Apple
+> M-series в `BENCHMARKS.md` имеет больше (и гетерогенные P/E) ядер. Любая строка
+> при `t≥4` здесь работает на пределе или за пределом насыщения ядер, а `t=8`
+> реально пере-подписывает 2 логических потока на ядро — считайте `t=8` кейсом
+> стресса от oversubscription, а не точкой масштабирования, сопоставимой 1:1 с
+> `t=8` на Mac.
 
-Reproduce a single row:
+Воспроизвести одну строку:
 
 ```bash
 ./gradlew jmh -Pjmh.include=StackScalingBenchmark -Pjmh.threads=4
 ```
 
-## Implementations compared
+## Сравниваемые реализации
 
-| Family | Class | Synchronization |
+| Семейство | Класс | Синхронизация |
 |---|---|---|
-| Blocking | `LockedStack` | `synchronized` methods |
-| Blocking | `ReentrantLockStack` | `ReentrantLock` (non-fair) |
-| Lock-free | `LockFreeStack` | CAS on `head` + node `next` via `AtomicReferenceFieldUpdater` |
-| Lock-free | `EliminationStack` | Treiber CAS + Hendler-Shavit elimination back-off array (8 slots) |
-| Lock-free | `BackoffLockFreeStack` | Treiber CAS + exponential CAS-failure backoff (`Thread.onSpinWait()`, 1→1024 spins) |
-| Lock-free | `ExchangerEliminationStack` | Treiber CAS + elimination via `java.util.concurrent.Exchanger` arena (**2 exchangers**, 500 ns timeout) |
+| Блокирующая | `LockedStack` | `synchronized`-методы |
+| Блокирующая | `ReentrantLockStack` | `ReentrantLock` (non-fair) |
+| Lock-free | `LockFreeStack` | CAS по `head` + `next` узла через `AtomicReferenceFieldUpdater` |
+| Lock-free | `EliminationStack` | Treiber CAS + elimination back-off массив Хендлера–Шавита (8 слотов) |
+| Lock-free | `BackoffLockFreeStack` | Treiber CAS + экспоненциальный backoff при провале CAS (`Thread.onSpinWait()`, 1→1024 спинов) |
+| Lock-free | `ExchangerEliminationStack` | Treiber CAS + elimination через арену `java.util.concurrent.Exchanger` (**2 exchanger'а**, таймаут 500 нс) |
 
-Benchmark shapes (see `BENCHMARKS.md` §Methodology for full description),
-all six implementations now run in all four:
-`StackScalingBenchmark` (symmetric `pushPop`, threads via `-Pjmh.threads`,
-`Mode.Throughput`), `StackContentionBenchmark` (`@Group` 2 producers + 2
-consumers, fixed 4, `Mode.Throughput` + `Mode.SampleTime`),
-`StackBurstyBenchmark` (`push` + ~200 CPU tokens + `pop` + ~200 tokens,
-`Mode.Throughput`), `StackAsymmetricBenchmark` (`@Group` 3 producers + 1
-consumer, fixed 4, `Mode.Throughput` + `Mode.SampleTime`).
+Формы бенчмарков (полное описание см. в `BENCHMARKS.md` §Методика), все шесть
+реализаций теперь прогоняются во всех четырёх:
+`StackScalingBenchmark` (симметричный `pushPop`, потоки через `-Pjmh.threads`,
+`Mode.Throughput`), `StackContentionBenchmark` (`@Group` 2 продюсера + 2
+консьюмера, фиксировано 4, `Mode.Throughput` + `Mode.SampleTime`),
+`StackBurstyBenchmark` (`push` + ~200 CPU-токенов + `pop` + ~200 токенов,
+`Mode.Throughput`), `StackAsymmetricBenchmark` (`@Group` 3 продюсера + 1
+консьюмер, фиксировано 4, `Mode.Throughput` + `Mode.SampleTime`).
 
 ---
 
-## Throughput — symmetric `pushPop` (ops/μs, higher is better)
+## Throughput — симметричный `pushPop` (ops/μs, больше — лучше)
 
 | impl | t=1 | t=2 | t=4 | t=8 | 2P + 2C |
 |---|---:|---:|---:|---:|---:|
@@ -72,9 +72,9 @@ consumer, fixed 4, `Mode.Throughput` + `Mode.SampleTime`).
 | `LockFreeStack` | **35.3 ± 0.6** | 7.6 ± 1.2 | 5.0 ± 0.4 | 4.9 ± 0.2 | 8.9 ± 0.6 |
 | `EliminationStack` | 35.2 ± 0.3 | 29.4 ± 0.4 | 20.4 ± 0.9 | 19.9 ± 0.6 | 20.9 ± 1.1 |
 | `BackoffLockFreeStack` | 35.5 ± 0.2 | 32.2 ± 0.3 | **31.3 ± 0.5** | **31.3 ± 0.6** | 43.7 ± 25.1 |
-| `ExchangerEliminationStack` (2 slots) | 35.4 ± 0.4 | **33.0 ± 1.0** | 21.2 ± 1.4 | 27.4 ± 1.3 | **43.0 ± 3.2** |
+| `ExchangerEliminationStack` (2 слота) | 35.4 ± 0.4 | **33.0 ± 1.0** | 21.2 ± 1.4 | 27.4 ± 1.3 | **43.0 ± 3.2** |
 
-## Throughput — asymmetric 3 producers + 1 consumer (ops/μs, higher is better)
+## Throughput — асимметричный 3 продюсера + 1 консьюмер (ops/μs, больше — лучше)
 
 | impl | 3P + 1C |
 |---|---:|
@@ -83,9 +83,9 @@ consumer, fixed 4, `Mode.Throughput` + `Mode.SampleTime`).
 | `LockFreeStack` | 7.2 ± 0.9 |
 | `EliminationStack` | **33.3 ± 1.8** |
 | `BackoffLockFreeStack` | 23.9 ± 9.3 |
-| `ExchangerEliminationStack` (2 slots) | 26.2 ± 4.7 |
+| `ExchangerEliminationStack` (2 слота) | 26.2 ± 4.7 |
 
-## Throughput — bursty `push + work + pop + work` (ops/μs, higher is better)
+## Throughput — bursty `push + work + pop + work` (ops/μs, больше — лучше)
 
 | impl | t=2 | t=4 | t=8 |
 |---|---:|---:|---:|
@@ -94,9 +94,9 @@ consumer, fixed 4, `Mode.Throughput` + `Mode.SampleTime`).
 | `LockFreeStack` | **2.09 ± 0.03** | **4.04 ± 0.08** | **4.07 ± 0.06** |
 | `EliminationStack` | 2.08 ± 0.04 | 3.76 ± 0.13 | 3.86 ± 0.17 |
 | `BackoffLockFreeStack` | 2.10 ± 0.02 | 3.98 ± 0.10 | 3.82 ± 0.46 |
-| `ExchangerEliminationStack` (2 slots) | 1.69 ± 0.25 | 2.66 ± 0.08 | 2.96 ± 0.16 |
+| `ExchangerEliminationStack` (2 слота) | 1.69 ± 0.25 | 2.66 ± 0.08 | 2.96 ± 0.16 |
 
-## Allocation (B/op, lower is better)
+## Аллокация (B/op, меньше — лучше)
 
 | impl | t=1 sym | t=2 sym | t=4 sym | t=8 sym | 2P + 2C | 3P + 1C | t=2 bursty | t=4 bursty | t=8 bursty |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -105,17 +105,17 @@ consumer, fixed 4, `Mode.Throughput` + `Mode.SampleTime`).
 | `LockFreeStack` | 24.0 | 24.0 | 24.0 | 24.0 | 18.1 | 18.6 | 24.1 | 24.0 | 24.0 |
 | `EliminationStack` | 24.0 | 24.0 | 24.0 | 24.0 | 25.5 | 18.8 | 24.1 | 24.0 | 24.0 |
 | `BackoffLockFreeStack` | 24.0 | 24.0 | 24.0 | 24.0 | 13.3 | 16.0 | 24.1 | 24.0 | 24.0 |
-| `ExchangerEliminationStack` (2 slots) | 24.0 | 25.4 | 24.7 | 24.0 | 12.6 | 15.0 | 36.9 | **38.5** | 25.4 |
+| `ExchangerEliminationStack` (2 слота) | 24.0 | 25.4 | 24.7 | 24.0 | 12.6 | 15.0 | 36.9 | **38.5** | 25.4 |
 
 ---
 
-## Latency distribution — contended workloads (SampleTime, µs/op, lower is better)
+## Распределение латентности — contended-нагрузки (SampleTime, µs/op, меньше — лучше)
 
-Same rows as `BENCHMARKS.md` §*Latency distribution* — p99.9 is the
-meaningful tail metric, `max` is one worst sample (JIT/GC/scheduler
-hiccup), read as an order of magnitude, not a value.
+Те же строки, что и `BENCHMARKS.md` §*Распределение латентности* — p99.9 —
+осмысленная метрика хвоста, `max` — один худший сэмпл (JIT/GC/scheduler икот),
+читается как порядок величины, а не значение.
 
-### 2 producers + 2 consumers (`StackContentionBenchmark`)
+### 2 продюсера + 2 консьюмера (`StackContentionBenchmark`)
 
 | impl | p50 | p90 | p99 | p99.9 | max |
 |---|---:|---:|---:|---:|---:|
@@ -124,11 +124,11 @@ hiccup), read as an order of magnitude, not a value.
 | `LockFreeStack` | 0.357 | 1.005 | 2.25 | **4.75** | 11043 |
 | `EliminationStack` | 0.095 | 0.761 | 3.47 | 7.06 | 6267 |
 | `BackoffLockFreeStack` | 0.042 | 0.087 | 3.57 | 1404.93 | **1769996** |
-| `ExchangerEliminationStack` (2 slots) | 0.043 | 0.266 | **2.87 †** | 55.49 | 7627 |
+| `ExchangerEliminationStack` (2 слота) | 0.043 | 0.266 | **2.87 †** | 55.49 | 7627 |
 
-† Tied within noise with `EliminationStack`'s p99 (both round to ~2.9 µs on repeat forks).
+† Вровень в пределах шума с p99 `EliminationStack` (оба округляются до ~2.9 µs на повторных forks).
 
-### 3 producers + 1 consumer (`StackAsymmetricBenchmark`)
+### 3 продюсера + 1 консьюмер (`StackAsymmetricBenchmark`)
 
 | impl | p50 | p90 | p99 | p99.9 | max |
 |---|---:|---:|---:|---:|---:|
@@ -137,103 +137,99 @@ hiccup), read as an order of magnitude, not a value.
 | `LockFreeStack` | 0.396 | 1.108 | 2.66 | **5.67** | 214172 |
 | `EliminationStack` | **0.043** | 0.211 | 5.16 | 11.97 | 22020 |
 | `BackoffLockFreeStack` | 0.044 | 0.054 | **2.26** | 840.83 | **639631** |
-| `ExchangerEliminationStack` (2 slots) | 0.043 | 0.141 | 4.90 | 55.62 | 6144 |
+| `ExchangerEliminationStack` (2 слота) | 0.043 | 0.141 | 4.90 | 55.62 | 6144 |
 
-- **`BackoffLockFreeStack`'s `max` is a genuine outlier on this machine, not
-  a rounding artifact** — 1.77 ms *seconds* at 2P+2C (1,769,996 µs) and 640
-  ms at 3P+1C. The GC profiler confirms real GC pauses landed inside these
-  runs (5.1 s and 10.5 s of total GC time respectively, vs ~1 s for most
-  other impls), so a stop-the-world pause during an active exponential
-  backoff spin (up to 1024 `onSpinWait` iterations) is the likely cause.
-  Median and p90 are excellent (0.042–0.087 µs, among the best of any impl),
-  so this is a **tail-only** pathology — same "necessary but not sufficient"
-  lesson as `BENCHMARKS.md`'s framing: lock-free alone doesn't bound the
-  tail, and neither does a spin-based backoff once GC gets involved.
-- **`EliminationStack` is again the tail reference on p99.9** (7.06 µs
-  2P+2C, 11.97 µs 3P+1C) — same story as the Mac: a bounded on-core spin
-  fallback that never parks gives the tightest deepest-percentile figure.
-- **The retuned (2-slot) `ExchangerEliminationStack` has a good p99 but a
-  much worse p99.9 than on the Mac** — 55.5 / 55.6 µs here vs 14.2 / 85.2
-  µs there (2P+2C better on Mac, 3P+1C worse on Mac — mixed). With only 4
-  cores, 2 exchangers still absorb the traffic well enough for a good
-  median/p99, but occasional unmatched attempts fall through to the
-  `Exchanger`'s park path and show up one percentile deeper than on the
-  Mac's more numerous cores.
-- **`ReentrantLockStack` again has the best median but a heavy `max`**
-  (28–213 ms), the same barging-vs-park split documented in `BENCHMARKS.md`.
+- **`max` у `BackoffLockFreeStack` — настоящий выброс на этой машине, а не
+  артефакт округления** — 1.77 **секунды** на 2P+2C (1 769 996 µs) и 640 ms на
+  3P+1C. GC-профайлер подтверждает, что реальные GC-паузы попали внутрь этих
+  прогонов (5.1 s и 10.5 s суммарного GC-времени соответственно, против ~1 s у
+  большинства других реализаций), так что stop-the-world пауза во время активного
+  экспоненциального backoff-спина (до 1024 итераций `onSpinWait`) — вероятная
+  причина. Медиана и p90 отличные (0.042–0.087 µs, среди лучших у любой
+  реализации), так что это **чисто хвостовая** патология — тот же урок
+  «необходимо, но недостаточно» из формулировки `BENCHMARKS.md`: одного lock-free
+  недостаточно для ограничения хвоста, как и спинового backoff'а, когда
+  подключается GC.
+- **`EliminationStack` снова референс хвоста по p99.9** (7.06 µs 2P+2C, 11.97 µs
+  3P+1C) — та же история, что и на Mac: ограниченный on-core спиновый фолбэк,
+  который никогда не паркается, даёт самый тесный показатель на глубоком
+  перцентиле.
+- **У перетюненного (2-слотового) `ExchangerEliminationStack` хороший p99, но
+  заметно худший p99.9, чем на Mac** — 55.5 / 55.6 µs здесь против 14.2 / 85.2 µs
+  там (2P+2C лучше на Mac, 3P+1C хуже на Mac — смешанно). Всего с 4 ядрами 2
+  exchanger'а всё же поглощают трафик достаточно для хорошей медианы/p99, но
+  редкие несматчившиеся попытки проваливаются в park-путь `Exchanger` и всплывают
+  на перцентиль глубже, чем на более многоядерном Mac.
+- **У `ReentrantLockStack` снова лучшая медиана, но тяжёлый `max`** (28–213 ms),
+  то же разделение barging-против-park, задокументированное в `BENCHMARKS.md`.
 
-## Findings (this machine)
+## Выводы (эта машина)
 
-- **`LockFreeStack` still collapses earliest, but not to zero** — t=1→t=2
-  drops 35.3 → 7.6 ops/μs (−78%), close in relative size to the *new* Mac
-  number (120.0 → 28.7, −76%): both machines now show the collapse
-  starting at t=2, not t≥4 as the old (8-slot-era) Mac reference did. The
-  difference that remains is the floor: Linux keeps ~14% of its peak at
-  t=8 (4.9 vs 35.3), while the Mac drops to ~3% of its peak (3.2 vs
-  120.0) — no SMT means fewer logical contenders even at "t=8", so this
-  box never fully bottoms out the way the 10-core Mac does.
-- **`BackoffLockFreeStack` scales dramatically better here than on the
-  Mac — the biggest divergence in this refresh.** On Linux it stays flat
-  from t=2 through t=8 (32.2 → 31.3 → 31.3 ops/μs), ending up *tied with
-  `ExchangerEliminationStack` for the best symmetric-scaling throughput at
-  t=4/t=8*. On the Mac it instead tracks plain `LockFreeStack`'s collapse
-  almost exactly (27.9 → 13.2 → 3.2, nearly identical to `LockFreeStack`'s
-  28.7 → 13.7 → 3.2). With only 4 physical cores, exponential
-  `onSpinWait` backoff apparently has enough room to actually de-schedule
-  retry pressure between CAS attempts; on the Mac's higher core count the
-  same backoff schedule doesn't prevent the same head-CAS collapse.
-- **`ReentrantLockStack`'s high-thread-count strength on the Mac does not
-  reproduce here.** On the Mac (2-slot report), `ReentrantLock` *wins*
-  t=4 (69.6), t=8 (67.8), and 2P+2C (89.2) outright. On Linux it never
-  leads a single throughput row — its best showing is t=4/t=8 symmetric
-  (17.7/17.8), well behind `BackoffLockFreeStack`/`ExchangerEliminationStack`
-  (~27–33), and at 2P+2C it is the *worst* impl measured (11.3 ± 7.3,
-  behind even `LockedStack`). The t=2 weak point flagged as a possible
-  one-off artifact in the previous version of this report (3.6 ± 0.2)
-  reproduced almost exactly in this fresh run (3.3 ± 0.4) — it no longer
-  looks like a fluke, but a real property of non-fair `ReentrantLock`
-  barging at exactly 2 threads on this CPU.
-- **`EliminationStack` again wins the asymmetric 3P+1C row** (33.3 ops/μs)
-  over `ExchangerEliminationStack` (26.2) — the same flip versus the Mac
-  (where `ExchangerEliminationStack` wins 3P+1C decisively, 94.1) noted in
-  the previous version of this report, and it still holds under the
-  retuned 2-slot config.
-- **Bursty workload again favors `LockFreeStack`/`BackoffLockFreeStack`**
-  (4.04–4.07 ops/μs at t=4/t=8), matching the Mac's finding that low
-  natural contention plus a cheap single-CAS fast path beats
-  elimination/exchanger overhead when there's think-time between
-  operations. Unlike the Mac (which drops to 2.4 at bursty t=8),
-  throughput here stays high through t=8 — consistent with the "no SMT
-  means t=8 doesn't fully oversubscribe the way it implies" theme above.
-- **`ExchangerEliminationStack` allocation under bursty is lower here than
-  on the Mac** — 38.5 B/op at t=4 (peak) vs the Mac's 56 B/op. Fewer
-  contending threads on 4 cores means a higher elimination match rate, so
-  fewer failed exchanges fall through to `Exchanger`'s internal `Node`
-  allocation.
+- **`LockFreeStack` по-прежнему обваливается раньше всех, но не в ноль** — t=1→t=2
+  падает 35.3 → 7.6 ops/μs (−78%), близко по относительному размеру к *новому*
+  числу Mac (120.0 → 28.7, −76%): обе машины теперь показывают начало обвала на
+  t=2, а не при t≥4, как старый (эпохи 8 слотов) референс Mac. Остающаяся разница
+  — это пол: Linux держит ~14% пика на t=8 (4.9 против 35.3), тогда как Mac
+  падает до ~3% пика (3.2 против 120.0) — отсутствие SMT означает меньше
+  логических конкурентов даже на «t=8», поэтому этот бокс никогда не проседает до
+  дна так, как 10-ядерный Mac.
+- **`BackoffLockFreeStack` масштабируется здесь заметно лучше, чем на Mac — это
+  крупнейшая дивергенция в данном refresh.** На Linux он держится плоско с t=2 по
+  t=8 (32.2 → 31.3 → 31.3 ops/μs), в итоге *вровень с `ExchangerEliminationStack`
+  за лучший symmetric-scaling throughput при t=4/t=8*. На Mac он вместо этого
+  трекает обвал простого `LockFreeStack` почти точь-в-точь (27.9 → 13.2 → 3.2,
+  почти идентично 28.7 → 13.7 → 3.2 у `LockFreeStack`). Всего с 4 физическими
+  ядрами экспоненциальный `onSpinWait`-backoff, похоже, имеет достаточно
+  «пространства», чтобы реально разгрузить давление ретраев между попытками CAS;
+  на более высоком числе ядер Mac то же расписание backoff'а не предотвращает тот
+  же head-CAS обвал.
+- **Сила `ReentrantLockStack` на высоких числах потоков с Mac здесь не
+  воспроизводится.** На Mac (2-слотовый отчёт) `ReentrantLock` *выигрывает* t=4
+  (69.6), t=8 (67.8) и 2P+2C (89.2) чисто. На Linux он не лидирует ни в одной
+  строке throughput — его лучший результат это t=4/t=8 симметрично (17.7/17.8),
+  заметно позади `BackoffLockFreeStack`/`ExchangerEliminationStack` (~27–33), а на
+  2P+2C он *худшая* измеренная реализация (11.3 ± 7.3, позади даже `LockedStack`).
+  Слабое место при t=2, помеченное как возможный разовый артефакт в предыдущей
+  версии этого отчёта (3.6 ± 0.2), почти в точности воспроизвелось в этом свежем
+  прогоне (3.3 ± 0.4) — это уже не выглядит случайностью, а реальным свойством
+  barging'а non-fair `ReentrantLock` ровно при 2 потоках на этом CPU.
+- **`EliminationStack` снова выигрывает асимметричную строку 3P+1C** (33.3 ops/μs)
+  над `ExchangerEliminationStack` (26.2) — тот же переворот относительно Mac (где
+  `ExchangerEliminationStack` выигрывает 3P+1C уверенно, 94.1), отмеченный в
+  предыдущей версии этого отчёта, и он держится под перетюненным 2-слотовым
+  конфигом.
+- **Bursty-нагрузка снова благоволит `LockFreeStack`/`BackoffLockFreeStack`**
+  (4.04–4.07 ops/μs при t=4/t=8), в согласии с выводом Mac, что низкая
+  естественная конкуренция плюс дешёвый одно-CAS fast-path бьёт overhead
+  elimination/exchanger, когда между операциями есть think-time. В отличие от Mac
+  (который падает до 2.4 на bursty t=8), throughput здесь держится высоким вплоть
+  до t=8 — в согласии с темой «нет SMT — значит t=8 не пере-подписывает так, как
+  подразумевает» выше.
+- **Аллокация `ExchangerEliminationStack` под bursty здесь ниже, чем на Mac** —
+  38.5 B/op при t=4 (пик) против 56 B/op у Mac. Меньше конкурирующих потоков на 4
+  ядрах означает более высокий match rate elimination, поэтому меньше провальных
+  обменов проваливаются во внутреннюю аллокацию `Node` у `Exchanger`.
 
-## Caveats
+## Оговорки
 
-- **Small core count amplifies noise.** Several rows above have error
-  bars comparable to or larger than the differences between
-  implementations (e.g. `BackoffLockFreeStack` 2P+2C 43.7±25.1,
-  `ReentrantLockStack` 2P+2C 11.3±7.3). Consider these directional,
-  not decisive, without a higher fork/iteration count.
-- **SampleTime `max` swings by orders of magnitude between sessions** —
-  one GC pause or scheduler hiccup can move it 10×+ (see
-  `BackoffLockFreeStack` above). Compare implementations on p99/p99.9,
-  which average over thousands/millions of samples; treat `max` as an
-  order of magnitude, not a value.
-- The 8→2 `ELIM_SLOTS` retune was tuned and validated on the Mac
-  (`ExchangerTuningBenchmark`, see `BENCHMARKS.md` §*Retuning*) at 2P+2C;
-  it was not independently re-swept on this machine. The tail and
-  throughput data above show it still behaves sensibly here (good
-  median/p99, some p99.9 cost), but a from-scratch sweep on a 4-core/no-SMT
-  box might land on a different optimum.
-- Reference throughput/allocation methodology, workload descriptions,
-  the Lincheck correctness caveat, and the full engineering narrative
-  behind each implementation live in `BENCHMARKS.md` — this file only
-  re-runs the Stack rows to have a second data point on different
-  hardware. Read `BENCHMARKS.md` first for context on *why* each
-  implementation exists.
-- Raw JMH console logs and `results.json` per run are not committed;
-  regenerate with the command in **Environment** above if needed.
+- **Малое число ядер усиливает шум.** У нескольких строк выше полосы ошибок
+  сопоставимы с различиями между реализациями или больше них (напр.
+  `BackoffLockFreeStack` 2P+2C 43.7±25.1, `ReentrantLockStack` 2P+2C 11.3±7.3).
+  Считайте их directional, а не решающими, без более высокого числа fork/iteration.
+- **SampleTime `max` качается на порядки между сессиями** — одна GC-пауза или
+  икот планировщика могут сдвинуть его в 10×+ (см. `BackoffLockFreeStack` выше).
+  Сравнивайте реализации по p99/p99.9, которые усредняют по тысячам/миллионам
+  сэмплов; `max` считайте порядком величины, а не значением.
+- Перетюнинг `ELIM_SLOTS` 8→2 тюнился и валидировался на Mac
+  (`ExchangerTuningBenchmark`, см. `BENCHMARKS.md` §*Перетюнинг*) на 2P+2C; на
+  этой машине он независимо не пересвипался. Данные по хвосту и throughput выше
+  показывают, что он всё ещё ведёт себя разумно здесь (хорошие медиана/p99,
+  некоторая цена по p99.9), но свип с нуля на 4-ядерном/без-SMT боксе мог бы
+  выйти на другой оптимум.
+- Референсная методика throughput/аллокации, описания нагрузок, оговорка о
+  корректности Lincheck и полный инженерный нарратив за каждой реализацией живут
+  в `BENCHMARKS.md` — этот файл лишь перепрогоняет Stack-строки, чтобы иметь
+  вторую точку данных на другом железе. Сначала читайте `BENCHMARKS.md` для
+  контекста, *почему* каждая реализация существует.
+- Сырые консольные логи JMH и `results.json` по каждому прогону не коммитятся;
+  регенерируйте командой из раздела **Окружение** выше при необходимости.
